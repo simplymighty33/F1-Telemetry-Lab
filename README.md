@@ -20,7 +20,15 @@ Built by a hobbyist developer for players who want to review their driving after
 
 ## Getting started
 
-The local 1.0 Windows build is ready, but **no downloadable release asset has been uploaded to this repository yet**. See [Releases](https://github.com/simplymighty33/F1-Telemetry-Lab/releases) for future downloads. GitHub's **Code → Download ZIP** is not a packaged Windows application.
+**[Download F1 Telemetry Lab 1.0 for Windows](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.0/F1TelemetryLab-1.0-Windows.zip)** (approximately 10.8 MiB). See the [1.0 release page](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.0) for release information and checksums.
+
+Download `F1TelemetryLab-1.0-Windows.zip` from the release assets. GitHub's **Code → Download ZIP** and automatically generated **Source code** archives are not packaged Windows applications.
+
+ZIP SHA-256:
+
+```text
+1D3D086C5A09D5338FFED0E62968A45640A5DFD10A737203652180B4917CB79F
+```
 
 Once you have the complete Windows distribution:
 
@@ -53,7 +61,7 @@ Bug reports and suggestions are welcome through [Issues](https://github.com/simp
 
 ## Project status and licensing
 
-The 1.0 source code, tests, and Windows packaging configuration are included in this repository. Binary release uploads are being prepared separately.
+The 1.0 source code, tests, and Windows packaging configuration are included in this repository. The packaged Windows application is available in [Release v1.0.0](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.0).
 
 ### Run from source
 
