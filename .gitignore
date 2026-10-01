@@ -1,0 +1,38 @@
+# Python/build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+build/
+dist/
+*.spec.bak
+
+# Private recordings, databases, logs, and generated reports
+data/
+logs/
+outputs/
+output/
+work/
+.test-*/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+raw_packets*.bin
+
+# Local user settings and credentials; publish examples explicitly
+config/settings.json
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor/OS files
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini

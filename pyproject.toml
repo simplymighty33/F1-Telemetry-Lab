@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "f1-telemetry-lab"
+version = "1.0.0"
+description = "Raw-first F1 23/24/25 UDP telemetry collector"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0,<7"]
+
+[project.scripts]
+f1-telemetry-lab = "collector.gui:main"
+f1-telemetry-collector = "collector.main:main"
+f1-telemetry-inspect = "collector.inspect_session:main"
+f1-telemetry-ui = "collector.gui:main"
+f1-telemetry-decode = "collector.decode_session:main"
+f1-telemetry-analyze = "collector.analyze_session:main"
+f1-telemetry-analysis-ui = "collector.analysis_gui:main"
+f1-telemetry-compress = "collector.compress_archive:main"
+f1-telemetry-prepare = "collector.prepare_session:main"
+
+[tool.setuptools.packages.find]
+include = ["collector*", "decoder*", "storage*", "analysis*"]
+
+[tool.unittest]
+start-directory = "tests"
+
