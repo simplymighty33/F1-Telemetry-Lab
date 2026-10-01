@@ -6,7 +6,7 @@ The current Windows interface is Chinese. The English descriptions below include
 
 Use a complete packaged Windows distribution, not GitHub's source ZIP. Extract the whole `F1TelemetryLab-1.0` folder and keep `F1TelemetryLab.exe` beside `_internal`. Python is not required for the packaged application.
 
-Choose a writable folder with enough free disk space. On first startup, the application creates `config/`, `data/`, and `logs/` beside the EXE. No Windows download asset has been published to this repository yet; check the repository's Releases page for availability.
+Choose a writable folder with enough free disk space. On first startup, the application creates `config/`, `data/`, and `logs/` beside the EXE. Download the [complete Windows ZIP](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.0/F1TelemetryLab-1.0-Windows.zip) from [Release v1.0.0](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.0).
 
 ## 2. Game settings
 
