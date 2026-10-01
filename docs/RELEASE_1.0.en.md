@@ -39,7 +39,15 @@ The synthetic protocol checks are not real-game long-duration tests for every su
 
 ## Distribution status
 
-The local Windows build is complete. **A GitHub Release and downloadable binary asset have not yet been published.** This file is release documentation, not a download announcement.
+**[Release v1.0.0](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.0) is published.** Download [F1TelemetryLab-1.0-Windows.zip](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.0/F1TelemetryLab-1.0-Windows.zip) (11,290,783 bytes, approximately 10.8 MiB). Extract the entire folder before running the EXE. GitHub's automatically generated Source code archives are not packaged Windows applications.
+
+The release tag points to the tested 1.0 source publication. Post-publication download-link updates are on `main`; the release tag and binary have not been rewritten.
+
+SHA-256 of the **Windows ZIP**:
+
+```text
+1D3D086C5A09D5338FFED0E62968A45640A5DFD10A737203652180B4917CB79F
+```
 
 Expected full-folder name: `F1TelemetryLab-1.0`.
 
