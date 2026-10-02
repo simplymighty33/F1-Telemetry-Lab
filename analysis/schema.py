@@ -5,7 +5,27 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+
+def ensure_quality_schema(connection: sqlite3.Connection) -> None:
+    """Additive derived-only migration; does not commit the caller's transaction."""
+    statements = (
+        """CREATE TABLE IF NOT EXISTS sample_origins(session_uid TEXT, overall_frame_identifier INTEGER,
+            raw_start_offset INTEGER, raw_end_offset INTEGER, PRIMARY KEY(session_uid,overall_frame_identifier))""",
+        """CREATE TABLE IF NOT EXISTS frame_quality_issues(session_uid TEXT, overall_frame_identifier INTEGER,
+            frame_identifier INTEGER, lap_number INTEGER, distance_m REAL, session_time REAL,
+            raw_start_offset INTEGER, raw_end_offset INTEGER, missing_parts_json TEXT,
+            superseded INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(session_uid,overall_frame_identifier))""",
+        """CREATE TABLE IF NOT EXISTS lap_quality_details(session_uid TEXT, lap_number INTEGER,
+            quality_version INTEGER NOT NULL, details_json TEXT NOT NULL, PRIMARY KEY(session_uid,lap_number))""",
+        """CREATE TABLE IF NOT EXISTS quality_context_events(session_uid TEXT, raw_offset INTEGER,
+            overall_frame_identifier INTEGER, kind TEXT, details_json TEXT,
+            PRIMARY KEY(session_uid,raw_offset,kind))""",
+        "CREATE INDEX IF NOT EXISTS frame_quality_lap_idx ON frame_quality_issues(session_uid,lap_number,superseded)",
+    )
+    for sql in statements:
+        connection.execute(sql)
 
 
 def create_schema(connection: sqlite3.Connection) -> None:
@@ -251,3 +271,4 @@ def create_schema(connection: sqlite3.Connection) -> None:
             ON telemetry_samples(session_uid, frame_identifier, superseded);
         """
     )
+    ensure_quality_schema(connection)

@@ -75,6 +75,7 @@ class PacketCapture:
         self.packet_count = 0
         self.parse_error_count = 0
         self.software_drop_count = 0
+        self.resource_health: dict[str, Any] = {}
         self.first_packet_monotonic_ns: int | None = None
         self.last_packet_monotonic_ns: int | None = None
         self._closed = False
@@ -198,6 +199,7 @@ class PacketCapture:
             "packet_count": self.packet_count,
             "parse_error_count": self.parse_error_count,
             "software_drop_count": self.software_drop_count,
+            "resource_health": dict(self.resource_health),
             "average_total_packets_per_second": (
                 round((self.packet_count - 1) / duration, 3) if duration > 0 else 0.0
             ),

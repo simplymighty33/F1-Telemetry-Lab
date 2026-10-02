@@ -21,8 +21,9 @@ class FoundationSnapshot:
 
 
 class FoundationWorker:
-    def __init__(self, source: Path, watermark: Callable[[], int], logger: logging.Logger) -> None:
+    def __init__(self, source: Path, watermark: Callable[[], int], logger: logging.Logger, pressure=None) -> None:
         self.source, self.watermark, self.logger = source, watermark, logger
+        self.pressure = pressure or (lambda: False)
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._snapshot = FoundationSnapshot()
@@ -49,6 +50,10 @@ class FoundationWorker:
                 while True:
                     if self._stop.is_set() and closing_deadline is None:
                         closing_deadline = time.monotonic() + 2.0
+                    if not self._stop.is_set() and self.pressure():
+                        self._publish("throttled", store.progress["packets"], store.progress["errors"])
+                        self._stop.wait(0.25)
+                        continue
                     limit = self.watermark()
                     batch = cursor.next_batch(limit)
                     if batch:

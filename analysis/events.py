@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 import sqlite3
 from typing import Any, Iterable
+from analysis.quality import inspect_source
+from analysis.resample import _source_rows
 
 
 SAMPLE_COLUMNS = (
@@ -12,7 +14,7 @@ SAMPLE_COLUMNS = (
     "gear", "engine_rpm", "g_longitudinal", "front_wheels_angle",
 )
 
-EVENT_DETECTION_VERSION = 1
+EVENT_DETECTION_VERSION = 2
 EVENT_THRESHOLDS = {
     "brake_start": 0.05,
     "brake_end": 0.02,
@@ -296,15 +298,34 @@ def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[
         ]
         if not rows:
             continue
-        braking = _braking_events(rows)
-        throttle = _throttle_events(rows)
-        shifts = _gear_shift_events(rows)
+        length = connection.execute("SELECT track_length_m FROM sessions WHERE session_uid=?", (session_uid,)).fetchone()
+        quality = inspect_source(_source_rows(connection, session_uid, lap_number, length[0] if length else None))
+        chunks = []
+        current = []
+        for row in rows:
+            if not quality.supports(row["distance_m"]):
+                if current:
+                    chunks.append(current)
+                current = []
+                continue
+            if current and not quality.connects(current[-1]["distance_m"], row["distance_m"]):
+                chunks.append(current)
+                current = []
+            current.append(row)
+        if current:
+            chunks.append(current)
+        rows = [row for chunk in chunks for row in chunk]
+        if not rows:
+            continue
+        braking = [event for chunk in chunks for event in _braking_events(chunk)]
+        throttle = [event for chunk in chunks for event in _throttle_events(chunk)]
+        shifts = [event for chunk in chunks for event in _gear_shift_events(chunk)]
         _insert_events(connection, session_uid, lap_number, braking, throttle, shifts)
 
         sample_count = len(rows)
         percent = lambda count: 100.0 * count / sample_count
         speeds = [float(row["speed_kph"]) for row in rows if row["speed_kph"] is not None]
-        distance_span = max(1.0, float(rows[-1]["distance_m"]) - float(rows[0]["distance_m"]))
+        distance_span = max(1.0, sum(chunk[-1]["distance_m"] - chunk[0]["distance_m"] for chunk in chunks))
         distance_km = distance_span / 1000.0
         peak_brakes = [event["peak_brake"] for event in braking]
         smoothness = [event["release_smoothness"] for event in braking]
@@ -339,9 +360,9 @@ def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[
                 max(speeds) if speeds else None, min(speeds) if speeds else None,
                 sum(speeds) / len(speeds) if speeds else None,
                 len(braking), len(throttle), upshifts, downshifts,
-                _steering_corrections(rows),
-                _total_variation(row["steer"] for row in rows) / distance_km,
-                _total_variation(row["throttle"] for row in rows) / distance_km,
+                sum(_steering_corrections(chunk) for chunk in chunks),
+                sum(_total_variation(row["steer"] for row in chunk) for chunk in chunks) / distance_km,
+                sum(_total_variation(row["throttle"] for row in chunk) for chunk in chunks) / distance_km,
                 sum(peak_brakes) / len(peak_brakes) if peak_brakes else None,
                 sum(smoothness) / len(smoothness) if smoothness else None,
             ),

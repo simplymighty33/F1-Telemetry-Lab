@@ -41,7 +41,7 @@ class IncrementalTests(unittest.TestCase):
                 result = store.update(final=True, batch_size=4)
                 done = result["caught_up"]
         reference = Path(build_analysis(self.raw, output=self.root / "reference", distance_step_m=10, progress_every=0)["analysis_database"])
-        for table in ("sessions", "laps", "lap_tyres", "telemetry_samples", "events", "lap_analysis", "resampled_lap_samples", "braking_events", "throttle_events", "gear_shift_events", "lap_metrics", "session_metrics"):
+        for table in ("sessions", "laps", "lap_tyres", "telemetry_samples", "events", "lap_analysis", "resampled_lap_samples", "braking_events", "throttle_events", "gear_shift_events", "lap_metrics", "session_metrics", "lap_quality_details", "frame_quality_issues", "sample_origins", "quality_context_events"):
             self.assertEqual(table_rows(self.database, table), table_rows(reference, table), table)
         with IncrementalAnalysisStore(self.raw, self.database, distance_step_m=10) as store:
             self.assertTrue(store.update(final=True)["reused"])

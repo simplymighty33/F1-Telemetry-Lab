@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from queue import Empty, SimpleQueue
+import shutil
 import struct
 import threading
 import time
@@ -18,6 +18,7 @@ from collector.analysis_worker import AnalysisWorker
 from collector.pipeline import CapturePipeline
 from collector.settings import Settings
 from collector.udp_receiver import UdpReceiver
+from collector.health import resource_decision
 from decoder.header import HeaderDecodeError, decode_header
 from decoder.full_parser import PacketDecodeError, decode_packet
 from decoder.protocol import game_label
@@ -44,6 +45,7 @@ class CollectorSnapshot:
     foundation_error: str | None = None
     analysis_state: str = "disabled"
     analysis_error: str | None = None
+    health_warnings: tuple[str, ...] = ()
 
 
 class CollectorService:
@@ -68,13 +70,18 @@ class CollectorService:
             name="collector-runtime",
             daemon=False,
         )
-        self._lap_events: SimpleQueue[LapHistoryUpdate] = SimpleQueue()
+        self._latest_lap_update: LapHistoryUpdate | None = None
+        self._pressure = threading.Event()
+        self._health_stop = threading.Event()
+        self._health_thread = None
+        self._health_warnings = ()
+        self._resource_error = None
         self._state = "starting"
         self._message = "正在启动采集器"
         self._error: str | None = None
         self._received_packets = 0
         self._last_packet_at_ns: int | None = None
-        self._recent_packet_times: deque[float] = deque()
+        self._recent_packet_times: deque[float] = deque(maxlen=8192)
         self._capture: PacketCapture | None = None
         self._pipeline: CapturePipeline | None = None
         self._foundation: FoundationWorker | None = None
@@ -103,12 +110,54 @@ class CollectorService:
         return not self._thread.is_alive()
 
     def drain_lap_updates(self) -> list[LapHistoryUpdate]:
-        updates: list[LapHistoryUpdate] = []
-        while True:
+        # History updates are complete snapshots, not individual lap events.
+        # Coalesce only UI state; every packet and authoritative lap stays on disk.
+        with self._lock:
+            update = self._latest_lap_update
+            self._latest_lap_update = None
+        return [update] if update is not None else []
+
+    def _monitor_resources(self):
+        previous = ()
+        stats = {"checks": 0, "pressure_checks": 0, "queue_peak": 0, "foundation_lag_peak": 0,
+                 "analysis_lag_peak": 0, "min_free_bytes": None, "disk_stop": False, "disk_check_failures": 0}
+        while not self._health_stop.is_set():
             try:
-                updates.append(self._lap_events.get_nowait())
-            except Empty:
-                return updates
+                free = shutil.disk_usage(self.data_directory).free
+            except OSError:
+                free = None
+            foundation = self._foundation.snapshot() if self._foundation else None
+            analysis = self._analysis.snapshot() if self._analysis else None
+            queued = self._pipeline.queue_size
+            foundation_lag = max(0, self._capture.packet_count - foundation.packets) if foundation else 0
+            analysis_lag = max(0, foundation.packets - analysis.packets) if foundation and analysis else 0
+            decision = resource_decision(queued, self.settings.queue_capacity, free,
+                paused=self._pressure.is_set(),
+                foundation_lag=foundation_lag, analysis_lag=analysis_lag)
+            stats["checks"] += 1
+            stats["pressure_checks"] += int(decision.pause_derived)
+            stats["queue_peak"] = max(stats["queue_peak"], queued)
+            stats["foundation_lag_peak"] = max(stats["foundation_lag_peak"], foundation_lag)
+            stats["analysis_lag_peak"] = max(stats["analysis_lag_peak"], analysis_lag)
+            stats["disk_stop"] |= decision.stop_capture
+            if free is None:
+                stats["disk_check_failures"] += 1
+            else:
+                stats["min_free_bytes"] = min(stats["min_free_bytes"], free) if stats["min_free_bytes"] is not None else free
+            self._capture.resource_health = dict(stats)
+            self._pressure.set() if decision.pause_derived else self._pressure.clear()
+            with self._lock:
+                self._health_warnings = decision.warnings
+                if decision.stop_capture:
+                    self._resource_error = "磁盘可用空间低于安全预留，已停止接收并保存队列内数据"
+                    self._stop_requested.set()
+            if decision.warnings != previous:
+                if decision.warnings:
+                    self.logger.warning("Collector health: %s", "; ".join(decision.warnings))
+                elif previous:
+                    self.logger.info("Collector resource pressure cleared")
+                previous = decision.warnings
+            self._health_stop.wait(1.0)
 
     def snapshot(self) -> CollectorSnapshot:
         now = time.monotonic()
@@ -141,6 +190,7 @@ class CollectorService:
                 foundation_error=self._foundation.snapshot().error if self._foundation else None,
                 analysis_state=self._analysis.snapshot().state if self._analysis else "disabled",
                 analysis_error=self._analysis.snapshot().error if self._analysis else None,
+                health_warnings=self._health_warnings,
             )
 
     def _set_state(self, state: str, message: str, error: str | None = None) -> None:
@@ -195,11 +245,15 @@ class CollectorService:
                     capture.session_directory / "raw_packets.bin",
                     lambda: capture.raw_writer.persisted_file_bytes,
                     self.logger,
+                    pressure=self._pressure.is_set,
                 )
                 self._foundation.start()
                 if self.settings.analysis_enabled:
-                    self._analysis = AnalysisWorker(capture.session_directory / "raw_packets.bin", self.logger)
+                    self._analysis = AnalysisWorker(capture.session_directory / "raw_packets.bin", self.logger,
+                                                    pressure=self._pressure.is_set)
                     self._analysis.start()
+            self._health_thread = threading.Thread(target=self._monitor_resources, name="collector-health", daemon=False)
+            self._health_thread.start()
             self.logger.info("Desktop collector listening on %s:%s", self.host, receiver.bound_port)
             self.logger.info("Recording: %s", capture.session_directory)
             self._set_state("listening", f"正在监听 UDP {receiver.bound_port}，等待游戏数据")
@@ -232,7 +286,8 @@ class CollectorService:
                 except (HeaderDecodeError, PacketDecodeError, ValueError, struct.error):
                     history_update = None
                 if history_update is not None:
-                    self._lap_events.put(history_update)
+                    with self._lock:
+                        self._latest_lap_update = history_update
                     if history_update.laps:
                         latest = history_update.laps[-1]
                         self.logger.info(
@@ -246,6 +301,11 @@ class CollectorService:
             self.logger.exception("Collector service failed: %s", exc)
         finally:
             receiver.close()
+            self._health_stop.set()
+            if self._health_thread is not None:
+                self._health_thread.join()
+            if failure is None and self._resource_error is not None:
+                failure = RuntimeError(self._resource_error)
             pipeline = self._pipeline
             if pipeline is not None:
                 try:

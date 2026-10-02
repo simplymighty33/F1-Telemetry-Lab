@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "f1-telemetry-lab"
-version = "1.0.0"
+version = "1.0.2"
 description = "Raw-first F1 23/24/25 UDP telemetry collector"
 requires-python = ">=3.10"
 

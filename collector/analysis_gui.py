@@ -61,6 +61,7 @@ class ComparisonChart(tk.Canvas):
     def __init__(self, master: tk.Misc) -> None:
         super().__init__(master, bg=PANEL, highlightthickness=0, height=430)
         self.comparison: LapComparison | None = None
+        self.focus_range: tuple[float, float] | None = None
         self.hover_var = tk.StringVar(value="将鼠标移到曲线上查看该距离的数值")
         self.bind("<Configure>", lambda _event: self.redraw())
         self.bind("<Motion>", self._hover)
@@ -68,7 +69,20 @@ class ComparisonChart(tk.Canvas):
 
     def set_comparison(self, comparison: LapComparison | None) -> None:
         self.comparison = comparison
+        self.focus_range = None
         self.redraw()
+
+    def focus(self, bounds: tuple[float, float] | None) -> None:
+        self.focus_range = bounds
+        self.redraw()
+
+    def _visible_trace(self) -> tuple:
+        if self.comparison is None:
+            return ()
+        if self.focus_range is None:
+            return self.comparison.trace
+        start, end = self.focus_range
+        return tuple(p for p in self.comparison.trace if start <= p.distance_m <= end)
 
     def _geometry(self) -> tuple[float, float, float, list[tuple[float, float]]]:
         width = max(300, self.winfo_width())
@@ -93,12 +107,17 @@ class ComparisonChart(tk.Canvas):
                 text="请选择两个单圈进行比较", fill=MUTED, font=("Segoe UI", 12),
             )
             return
-        trace = comparison.trace
+        trace = self._visible_trace()
+        valid_trace = tuple(p for p in trace if p.valid)
+        if not valid_trace:
+            self.create_text(self.winfo_width() / 2, self.winfo_height() / 2,
+                             text="源采样无法可靠核验，暂不绘制比较曲线", fill=MUTED)
+            return
         left, right, _, panels = self._geometry()
-        max_distance = max(point.distance_m for point in trace)
+        min_distance, max_distance = trace[0].distance_m, trace[-1].distance_m
 
         def x_position(distance: float) -> float:
-            return left + (right - left) * distance / max(1.0, max_distance)
+            return left + (right - left) * (distance - min_distance) / max(1.0, max_distance - min_distance)
 
         for top, bottom in panels:
             self.create_rectangle(left, top, right, bottom, fill="#151c27", outline=GRID)
@@ -106,26 +125,30 @@ class ComparisonChart(tk.Canvas):
                 x = left + (right - left) * division / 5
                 self.create_line(x, top, x, bottom, fill=GRID, dash=(2, 5))
 
-        delta_limit = max(100.0, max(abs(point.delta_ms) for point in trace) * 1.10)
-        self._series(trace, "delta_ms", -delta_limit, delta_limit, panels[0], left, right, max_distance, AMBER)
+        delta_limit = max(100.0, max(abs(point.delta_ms) for point in valid_trace) * 1.10)
+        self._series(trace, "delta_ms", -delta_limit, delta_limit, panels[0], left, right, max_distance, AMBER, min_distance=min_distance)
         delta_zero = sum(panels[0]) / 2
         self.create_line(left, delta_zero, right, delta_zero, fill=MUTED, dash=(4, 4))
 
-        speeds = [point.reference_speed_kph for point in trace] + [point.comparison_speed_kph for point in trace]
+        speeds = [point.reference_speed_kph for point in valid_trace] + [point.comparison_speed_kph for point in valid_trace]
         speed_min = max(0.0, min(speeds) - 10)
         speed_max = max(speeds) + 10
-        self._series(trace, "reference_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, GREEN)
-        self._series(trace, "comparison_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, CYAN)
+        self._series(trace, "reference_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, GREEN, min_distance=min_distance)
+        self._series(trace, "comparison_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, CYAN, min_distance=min_distance)
 
-        self._series(trace, "reference_throttle", 0.0, 1.0, panels[2], left, right, max_distance, GREEN)
-        self._series(trace, "comparison_throttle", 0.0, 1.0, panels[2], left, right, max_distance, CYAN)
-        self._series(trace, "reference_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#ff6468", dash=(4, 3))
-        self._series(trace, "comparison_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#d99cff", dash=(4, 3))
+        self._series(trace, "reference_throttle", 0.0, 1.0, panels[2], left, right, max_distance, GREEN, min_distance=min_distance)
+        self._series(trace, "comparison_throttle", 0.0, 1.0, panels[2], left, right, max_distance, CYAN, min_distance=min_distance)
+        self._series(trace, "reference_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#ff6468", dash=(4, 3), min_distance=min_distance)
+        self._series(trace, "comparison_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#d99cff", dash=(4, 3), min_distance=min_distance)
 
         for marker in comparison.reference_braking:
+            if not min_distance <= marker.start_distance_m <= max_distance:
+                continue
             x = x_position(marker.start_distance_m)
             self.create_line(x, panels[1][0], x, panels[2][1], fill=GREEN, dash=(2, 5))
         for marker in comparison.comparison_braking:
+            if not min_distance <= marker.start_distance_m <= max_distance:
+                continue
             x = x_position(marker.start_distance_m)
             self.create_line(x, panels[1][0], x, panels[2][1], fill=CYAN, dash=(2, 5))
 
@@ -138,7 +161,7 @@ class ComparisonChart(tk.Canvas):
             self.create_text(8, top + 4, text=title, fill=TEXT, anchor="nw", font=("Segoe UI Semibold", 9))
             self.create_text(8, top + 22, text=scale, fill=MUTED, anchor="nw", font=("Segoe UI", 8))
         for division in range(6):
-            distance = max_distance * division / 5
+            distance = min_distance + (max_distance - min_distance) * division / 5
             self.create_text(
                 x_position(distance), panels[2][1] + 9,
                 text=f"{distance / 1000:.1f} km", fill=MUTED,
@@ -157,17 +180,25 @@ class ComparisonChart(tk.Canvas):
         max_distance: float,
         color: str,
         dash: tuple[int, int] | None = None,
+        min_distance: float = 0.0,
     ) -> None:
         top, bottom = panel
         scale = max(1e-9, maximum - minimum)
         coordinates: list[float] = []
+        def flush() -> None:
+            if len(coordinates) >= 4:
+                self.create_line(*coordinates, fill=color, width=1.5, smooth=False, dash=dash, tags="series")
+            coordinates.clear()
         for point in trace:
-            x = left + (right - left) * point.distance_m / max(1.0, max_distance)
+            if not point.valid or not point.connected:
+                flush()
+            if not point.valid:
+                continue
+            x = left + (right - left) * (point.distance_m - min_distance) / max(1.0, max_distance - min_distance)
             value = float(getattr(point, field))
             y = bottom - (bottom - top) * (value - minimum) / scale
             coordinates.extend((x, min(bottom, max(top, y))))
-        if len(coordinates) >= 4:
-            self.create_line(*coordinates, fill=color, width=1.5, smooth=False, dash=dash)
+        flush()
 
     def _hover(self, event: tk.Event) -> None:
         comparison = self.comparison
@@ -176,11 +207,17 @@ class ComparisonChart(tk.Canvas):
         left, right, _, panels = self._geometry()
         if not left <= event.x <= right:
             return
-        maximum = comparison.trace[-1].distance_m
-        target = maximum * (event.x - left) / max(1.0, right - left)
-        point = min(comparison.trace, key=lambda item: abs(item.distance_m - target))
+        trace = self._visible_trace()
+        if not trace:
+            return
+        minimum, maximum = trace[0].distance_m, trace[-1].distance_m
+        target = minimum + (maximum - minimum) * (event.x - left) / max(1.0, right - left)
+        point = min(trace, key=lambda item: abs(item.distance_m - target))
         self.delete("hover")
-        x = left + (right - left) * point.distance_m / max(1.0, maximum)
+        if not point.valid or not point.connected:
+            self.hover_var.set(f"{point.distance_m:.0f} 米｜数据缺口或不可靠采样，不作操作解读")
+            return
+        x = left + (right - left) * (point.distance_m - minimum) / max(1.0, maximum - minimum)
         self.create_line(x, panels[0][0], x, panels[2][1], fill=TEXT, dash=(3, 3), tags="hover")
         self.hover_var.set(
             f"{point.distance_m:.0f} 米｜时间差 {format_delta(point.delta_ms)}｜"
@@ -328,6 +365,7 @@ class AnalysisWindow:
         self.quality_tree.configure(yscrollcommand=quality_scroll.set)
         quality_scroll.pack(side="right", fill="y")
         self.quality_tree.pack(side="left", fill="x", expand=True)
+        self.quality_tree.bind("<Double-1>", self._show_lap_quality)
         self.quality_frame.grid_remove()  # Do not spend height on an empty table before parsing.
         cards = tk.Frame(self.root, bg=BACKGROUND)
         cards.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 8))
@@ -349,8 +387,10 @@ class AnalysisWindow:
         self.hover_label = tk.Label(chart_frame, textvariable=self.chart.hover_var, bg=PANEL,
                                     fg=MUTED, anchor="w", padx=10, pady=4)
         self.hover_label.grid(row=1, column=0, sticky="ew")
-        metrics_body = tk.Frame(metric_frame, bg=PANEL)
-        metrics_body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.details_tabs = ttk.Notebook(metric_frame)
+        self.details_tabs.pack(fill="both", expand=True)
+        metrics_body = tk.Frame(self.details_tabs, bg=PANEL)
+        self.details_tabs.add(metrics_body, text="驾驶指标")
         metrics_body.columnconfigure(0, weight=1)
         metrics_body.rowconfigure(0, weight=1)
         self.metrics = ttk.Treeview(metrics_body, columns=("metric", "reference", "compare"), show="headings", style="Metrics.Treeview")
@@ -363,6 +403,33 @@ class AnalysisWindow:
         self.metrics.grid(row=0, column=0, sticky="nsew")
         metrics_vertical.grid(row=0, column=1, sticky="ns")
         metrics_horizontal.grid(row=1, column=0, sticky="ew")
+        region_frame = tk.Frame(self.details_tabs, bg=PANEL)
+        self.details_tabs.add(region_frame, text="时间区间")
+        region_frame.columnconfigure(0, weight=1)
+        region_frame.rowconfigure(0, weight=1, minsize=44)
+        region_frame.rowconfigure(1, weight=1, minsize=24)
+        self.region_tree = ttk.Treeview(region_frame, columns=("range", "kind", "delta"),
+                                        show="headings", height=4, style="Metrics.Treeview")
+        for key, title, width in (("range", "距离区间 (m)", 130), ("kind", "变化", 65), ("delta", "时间差 (s)", 90)):
+            self.region_tree.heading(key, text=title)
+            self.region_tree.column(key, width=width, minwidth=55, anchor="center")
+        self.region_tree.grid(row=0, column=0, sticky="nsew")
+        region_scroll = ttk.Scrollbar(region_frame, orient="vertical", command=self.region_tree.yview)
+        region_scroll.grid(row=0, column=1, sticky="ns")
+        self.region_tree.configure(yscrollcommand=region_scroll.set)
+        self.region_tree.bind("<<TreeviewSelect>>", self._region_selected)
+        self.region_tree.tag_configure("损失", foreground="#ff6468")
+        self.region_tree.tag_configure("获益", foreground=GREEN)
+        self.region_details = tk.Text(region_frame, height=3, width=1, wrap="word", bg=PANEL,
+                                      fg=TEXT, relief="flat", state="disabled", font=("Segoe UI", 9))
+        self.region_details.grid(row=1, column=0, sticky="nsew", pady=(6, 0))
+        details_scroll = ttk.Scrollbar(region_frame, orient="vertical", command=self.region_details.yview)
+        details_scroll.grid(row=1, column=1, sticky="ns")
+        self.region_details.configure(yscrollcommand=details_scroll.set)
+        self.full_lap_button = self._button(region_frame, "恢复整圈 / 查看汇总", self._restore_full_lap)
+        self.full_lap_button.configure(pady=0, borderwidth=0, highlightthickness=0, font=("Segoe UI", 8))
+        self.full_lap_button.grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
+        self._set_region_details("选择两个单圈后，这里显示时间获益和损失区间。")
         self.status_label = tk.Label(self.root, textvariable=self.status_var, bg=BACKGROUND, fg=MUTED,
                                      anchor="w", justify="left", pady=6)
         self.status_label.grid(row=7, column=0, sticky="ew", padx=20)
@@ -649,6 +716,8 @@ class AnalysisWindow:
         self.comparison = None
         self.chart.set_comparison(None)
         self.metrics.delete(*self.metrics.get_children())
+        self.region_tree.delete(*self.region_tree.get_children())
+        self._set_region_details("暂无可比较的单圈。")
         self.reference_var.set("")
         self.compare_var.set("")
         for variable, label in ((self.reference_card, "基准圈"), (self.compare_card, "对比圈"), (self.delta_card, "圈速差")):
@@ -680,14 +749,20 @@ class AnalysisWindow:
             self.laps = tuple(lap for lap in self.laps if lap.lap_number in allowed)
         self.quality_tree.delete(*self.quality_tree.get_children())
         titles = {"ready": "可分析", "invalid_lap": "游戏判定无效", "partial_capture": "距离覆盖不足",
-                  "insufficient_samples": "样本不足", "pending": "等待完整数据"}
+                  "insufficient_samples": "样本不足", "pending": "等待完整数据",
+                  "sample_gap": "采样存在大间隙", "missing_channels": "关键字段缺失或异常",
+                  "nonmonotonic_time": "圈内时间不连续"}
         for row in quality:
-            self.quality_tree.insert("", "end", values=(row["lap_number"], format_lap_time(row["lap_time_ms"]),
-                titles.get(row["quality_status"], row["quality_status"]),
+            details = row.get("details") or {}
+            warning_count = details.get("issue_count", len(details.get("issues", []))) + details.get("incomplete_frame_count", len(details.get("incomplete_frames", [])))
+            title = titles.get(row["quality_status"], row["quality_status"])
+            self.quality_tree.insert("", "end", iid=str(row["lap_number"]), values=(row["lap_number"], format_lap_time(row["lap_time_ms"]),
+                title + (f" / {warning_count}项待核验" if warning_count else ""),
                 "—" if row["coverage_ratio"] is None else f"{row['coverage_ratio'] * 100:.1f}%"))
+        self._quality_rows = {str(row["lap_number"]): row for row in quality}
         self._quality_has_rows = bool(quality)
         self._sync_quality_visibility()
-        self.quality_var.set(f"{len(quality)} 圈记录 / {len(self.laps)} 圈可对比")
+        self.quality_var.set(f"{len(quality)} 圈记录 / {len(self.laps)} 圈可对比；双击单圈状态查看质量明细")
         labels = {lap_label(lap): lap.lap_number for lap in self.laps}
         self._lap_labels = labels
         values = tuple(labels)
@@ -708,6 +783,50 @@ class AnalysisWindow:
         if session_uid:
             self._refresh_comparison(session_uid)
 
+    def _show_lap_quality(self, event=None) -> None:
+        item = self.quality_tree.identify_row(event.y) if event is not None else next(iter(self.quality_tree.selection()), "")
+        row = getattr(self, "_quality_rows", {}).get(item)
+        if not row:
+            return
+        details = row.get("details")
+        window = tk.Toplevel(self.root)
+        window.title(f"第 {row['lap_number']} 圈 · 数据质量")
+        window.geometry(f"{min(760, self.root.winfo_screenwidth()-80)}x{min(540, self.root.winfo_screenheight()-100)}")
+        text = tk.Text(window, wrap="word", bg=PANEL, fg=TEXT, padx=16, pady=16)
+        scroll = ttk.Scrollbar(window, command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        text.pack(fill="both", expand=True)
+        if not details:
+            content = "这是旧版分析结果，没有持久化质量明细。对比时仍会核验源采样；重新从 Raw 构建可获得完整明细。"
+        else:
+            content = (f"官方圈速：{format_lap_time(row['lap_time_ms'])}（游戏单圈历史）\n"
+                       f"实际覆盖：{details.get('start_m')}–{details.get('end_m')} m\n"
+                       f"赛道长度：{details.get('track_length_m')} m\n"
+                       f"典型采样间隔：{details.get('cadence_ms')} ms\n"
+                       f"Raw逻辑偏移范围：{details.get('raw_offset_range')}\n"
+                       "偏移指向原始记录，不代表压缩文件的物理字节位置。\n\n")
+            names = {"cadence_gap": "采样节奏异常", "large_gap": "大间隙",
+                     "missing_channels": "关键字段缺失", "clock_rollback": "圈内计时回退",
+                     "incomplete_frame": "帧内数据包未拼齐"}
+            for issue in details.get("issues", []):
+                content += f"{names.get(issue['kind'], issue['kind'])}：{issue['start_m']:.1f}–{issue['end_m']:.1f} m，游戏时间间隔 {issue.get('game_elapsed_ms')} ms\n"
+            frames = details.get("incomplete_frames", [])
+            content += f"\n未能拼接的帧：{details.get('incomplete_frame_count', len(frames))}（最多列出200条）\n"
+            labels = {0: "运动", 2: "圈速", 6: "车辆遥测"}
+            for frame in frames:
+                content += f"帧 {frame['frame']}：缺少 {', '.join(labels.get(p, str(p)) for p in frame['missing_parts'])}；Raw {frame['raw_start_offset']}–{frame['raw_end_offset']}\n"
+            content += "\n游戏状态变化（最多50条）：\n"
+            for context in details.get("contexts", []):
+                label = {"FLBK": "Flashback", "SSTA": "会话开始", "SEND": "会话结束"}.get(context["kind"])
+                if label is None:
+                    label = "暂停" if context["details"].get("paused") else "继续 / 模式或玩家状态更新"
+                content += f"{label}；Raw {context['raw_offset']}\n"
+            content += "缺少圈速包时，只能按相邻有效帧范围关联，不能保证精确归属。\n"
+            content += "\n这里只记录已观察到的异常，不代表准确UDP丢包数。计时边界、暂停和游戏状态变化需结合上下文核验。"
+        text.insert("1.0", content)
+        text.configure(state="disabled")
+
     def _refresh_comparison(self, session_uid: str) -> None:
         reference_lap = self._lap_labels.get(self.reference_var.get())
         comparison_lap = self._lap_labels.get(self.compare_var.get())
@@ -716,6 +835,7 @@ class AnalysisWindow:
         try:
             comparison = self.repository.comparison(session_uid, reference_lap, comparison_lap)
         except AnalysisDatabaseError as exc:
+            self._clear_comparison()
             self.status_var.set(str(exc))
             return
         self.comparison = comparison
@@ -726,10 +846,70 @@ class AnalysisWindow:
         self.compare_card.set(f"对比圈  {format_lap_time(candidate.lap_time_ms)}")
         self.delta_card.set(f"圈速差  {format_delta(candidate.lap_time_ms - reference.lap_time_ms)}")
         self._render_metrics(reference, candidate)
+        self._render_regions()
         self.status_var.set(
             f"绿色：第 {reference.lap_number} 圈（基准）　蓝色：第 {candidate.lap_number} 圈（对比）　"
-            "虚线表示制动起点"
+            "虚线表示制动起点；时间区间页可查看损失位置与操作对照"
         )
+
+    def _set_region_details(self, text: str) -> None:
+        self.region_details.configure(state="normal")
+        self.region_details.delete("1.0", "end")
+        self.region_details.insert("1.0", text)
+        self.region_details.configure(state="disabled")
+
+    def _render_regions(self) -> None:
+        self.region_tree.delete(*self.region_tree.get_children())
+        if self.comparison is None:
+            return
+        for index, region in enumerate(self.comparison.regions):
+            self.region_tree.insert("", "end", iid=str(index), tags=(region.kind,), values=(
+                f"{region.start_m:.0f}–{region.end_m:.0f}", region.kind, f"{region.delta_ms / 1000:+.3f}"))
+        self._restore_full_lap()
+
+    def _restore_full_lap(self) -> None:
+        self.chart.focus(None)
+        self.region_tree.selection_remove(*self.region_tree.selection())
+        comparison = self.comparison
+        if comparison is None:
+            return
+        official = comparison.comparison.lap_time_ms - comparison.reference.lap_time_ms
+        text = (f"官方整圈差：{format_delta(official)}\n"
+                f"已观察区间合计：{format_delta(comparison.observed_delta_ms)}\n"
+                f"未归属差额：{format_delta(comparison.unattributed_delta_ms)}\n"
+                "正值为对比圈损失，负值为获益；小变化保留。\n"
+                "未归属差额包含起终点未覆盖及数据缺口，不强行分配。\n"
+                "区间不等同于官方弯道，操作差异不代表因果。")
+        if comparison.residual_components:
+            text += "\n差额分解（算术分解，不代表已确认原因）："
+            for name, value in comparison.residual_components:
+                text += f"\n{name}：{value / 1000:+.4f} s"
+        if comparison.warnings:
+            text += "\n注意：" + "；".join(comparison.warnings)
+        self._set_region_details(text)
+
+    def _region_selected(self, _event=None) -> None:
+        selected = self.region_tree.selection()
+        if not selected or self.comparison is None:
+            return
+        index = int(selected[0])
+        if index >= len(self.comparison.regions):
+            return
+        region = self.comparison.regions[index]
+        self.chart.focus((region.start_m, region.end_m))
+        def distance(value) -> str:
+            return "未观察到跨越" if value is None else f"{value:.0f} m"
+        ref, candidate = region.reference, region.comparison
+        self._set_region_details(
+            f"{region.start_m:.0f}–{region.end_m:.0f} m：{region.kind} {format_delta(region.delta_ms)}\n"
+            "以下顺序为 基准 / 对比：\n"
+            f"入口速度：{ref.entry_speed_kph:.0f} / {candidate.entry_speed_kph:.0f} km/h\n"
+            f"最低速度：{ref.minimum_speed_kph:.0f} / {candidate.minimum_speed_kph:.0f} km/h\n"
+            f"出口速度：{ref.exit_speed_kph:.0f} / {candidate.exit_speed_kph:.0f} km/h\n"
+            f"制动跨越5%：{distance(ref.brake_start_m)} / {distance(candidate.brake_start_m)}\n"
+            f"最低速后油门跨越98%：{distance(ref.full_throttle_m)} / {distance(candidate.full_throttle_m)}\n"
+            f"最低前进挡：{ref.minimum_gear or '—'} / {candidate.minimum_gear or '—'}\n"
+            "位置精度受重采样间距限制。这里是区间操作观察，不是自动驾驶建议。")
 
     def _render_metrics(self, reference: LapSummary, candidate: LapSummary) -> None:
         self.metrics.delete(*self.metrics.get_children())
@@ -746,7 +926,8 @@ class AnalysisWindow:
             ("制动", f"{reference.braking_percent:.1f}%", f"{candidate.braking_percent:.1f}%"),
             ("滑行", f"{reference.coasting_percent:.1f}%", f"{candidate.coasting_percent:.1f}%"),
             ("刹车油门重叠", f"{reference.overlap_percent:.1f}%", f"{candidate.overlap_percent:.1f}%"),
-            ("最高速度", f"{reference.maximum_speed_kph:.0f} km/h", f"{candidate.maximum_speed_kph:.0f} km/h"),
+            ("最高速度", "—" if reference.maximum_speed_kph is None else f"{reference.maximum_speed_kph:.0f} km/h",
+             "—" if candidate.maximum_speed_kph is None else f"{candidate.maximum_speed_kph:.0f} km/h"),
             ("制动区", str(reference.braking_event_count), str(candidate.braking_event_count)),
             ("油门建立", str(reference.throttle_event_count), str(candidate.throttle_event_count)),
             ("升挡 / 降挡", f"{reference.upshift_count} / {reference.downshift_count}", f"{candidate.upshift_count} / {candidate.downshift_count}"),

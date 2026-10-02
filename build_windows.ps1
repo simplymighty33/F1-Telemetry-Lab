@@ -13,7 +13,7 @@ try {
     }
     python -m PyInstaller --noconfirm --clean ".\packaging\F1TelemetryCollector.spec"
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
-    Write-Host "Build complete: $ProjectRoot\dist\F1TelemetryLab-1.0\F1TelemetryLab.exe"
+    Write-Host "Build complete: $ProjectRoot\dist\F1TelemetryLab-1.0.2\F1TelemetryLab.exe"
 } finally {
     Pop-Location
 }

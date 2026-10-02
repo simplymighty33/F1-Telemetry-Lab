@@ -364,9 +364,12 @@ class CollectorWindow:
             _set_if_changed(self.session_var, f"Session：{snapshot.session_directory}")
         foundation_error = getattr(snapshot, "foundation_error", None)
         analysis_error = getattr(snapshot, "analysis_error", None)
+        health = getattr(snapshot, "health_warnings", ())
+        self.error_label.configure(fg=RED if snapshot.error or foundation_error or analysis_error else AMBER)
         _set_if_changed(self.error_var, f"错误：{snapshot.error}" if snapshot.error else (
             "基础数据整理暂停，Raw 采集仍继续；停止后可恢复处理。" if foundation_error else
-            "单圈分析暂停，Raw 采集仍继续；从 Session 可恢复处理。" if analysis_error else ""
+            "单圈分析暂停，Raw 采集仍继续；从 Session 可恢复处理。" if analysis_error else
+            "；".join(health) if isinstance(health, tuple) else ""
         ))
         colors = {
             "starting": AMBER,

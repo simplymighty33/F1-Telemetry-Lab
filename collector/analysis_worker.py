@@ -13,11 +13,13 @@ class AnalysisSnapshot:
     state: str = "waiting"
     laps: int = 0
     error: str | None = None
+    packets: int = 0
 
 
 class AnalysisWorker:
-    def __init__(self, source, logger):
+    def __init__(self, source, logger, pressure=None):
         self.source, self.logger = source, logger
+        self.pressure = pressure or (lambda: False)
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._snapshot = AnalysisSnapshot()
@@ -30,9 +32,10 @@ class AnalysisWorker:
         with self._lock:
             return self._snapshot
 
-    def _publish(self, state, laps=0, error=None):
+    def _publish(self, state, laps=0, error=None, packets=None):
         with self._lock:
-            self._snapshot = AnalysisSnapshot(state, laps, error)
+            self._snapshot = AnalysisSnapshot(state, laps, error,
+                                              self._snapshot.packets if packets is None else packets)
 
     def _run(self):
         try:
@@ -53,8 +56,13 @@ class AnalysisWorker:
                     closing = self._stop.is_set()
                     if closing and deadline is None:
                         deadline = time.monotonic() + 5.0
-                    result = store.update(final=closing, batch_size=10000)
-                    self._publish("ready" if result["caught_up"] else "processing", result["laps_resampled"])
+                    if not closing and self.pressure():
+                        self._publish("throttled", self.snapshot().laps)
+                        self._stop.wait(0.25)
+                        continue
+                    result = store.update(final=closing, batch_size=2000 if not closing else 10000)
+                    self._publish("ready" if result["caught_up"] else "processing", result["laps_resampled"],
+                                  packets=result["total_raw_packets"])
                     if closing and result["caught_up"]:
                         self._publish("stopped" if result.get("source_complete") else "pending", result["laps_resampled"])
                         return

@@ -33,7 +33,7 @@ from storage.raw_writer import iter_archive
 
 FRAME_PACKET_IDS = {0, 2, 6, 7, 10, 13}
 REQUIRED_FRAME_PARTS = {0, 2, 6}
-ANALYSIS_ENGINE_VERSION = 5
+ANALYSIS_ENGINE_VERSION = 7
 
 SAMPLE_COLUMNS = (
     "session_uid", "overall_frame_identifier", "frame_identifier",
@@ -191,9 +191,13 @@ def _frame_row(
 
 
 class _FrameWriter:
-    def __init__(self, connection: sqlite3.Connection, on_sample=None) -> None:
+    def __init__(self, connection: sqlite3.Connection, on_sample=None, on_issue=None) -> None:
         self.connection = connection
         self.on_sample = on_sample
+        self.on_issue = on_issue
+        self.context = {}
+        for uid, details in connection.execute("SELECT session_uid,details_json FROM quality_context_events WHERE kind='session_context' ORDER BY raw_offset"):
+            self.context[uid] = json.loads(details)
         self.pending: OrderedDict[tuple[str, int], dict[str, Any]] = OrderedDict()
         self.last_status: dict[str, dict[str, Any]] = {}
         self.last_damage: dict[str, dict[str, Any]] = {}
@@ -206,6 +210,26 @@ class _FrameWriter:
             f"VALUES ({placeholders})"
         )
 
+    def observe_context(self, header, body, offset):
+        if body is None:
+            return
+        uid = str(header.session_uid)
+        if header.packet_id == 3 and body.get("event_code") in ("FLBK", "SSTA", "SEND"):
+            self.connection.execute("INSERT OR REPLACE INTO quality_context_events VALUES (?,?,?,?,?)",
+                (uid, offset, header.overall_frame_identifier, body["event_code"], json.dumps(body.get("event_details", {}))))
+            return
+        if header.packet_id != 1:
+            return
+        current = {"paused": bool(body.get("game_paused")), "player_car_index": header.player_car_index,
+                   "game_mode": body.get("game_mode"), "session_type": body.get("session_type")}
+        if self.context.get(uid) != current:
+            self.connection.execute("INSERT OR REPLACE INTO quality_context_events VALUES (?,?,?,?,?)",
+                                    (uid, offset, header.overall_frame_identifier, "session_context", json.dumps(current)))
+            self.context[uid] = current
+
+    def supersede_quality(self, uid, target):
+        self.connection.execute("UPDATE frame_quality_issues SET superseded=1 WHERE session_uid=? AND frame_identifier>?", (uid, target))
+
     def add(
         self,
         header: PacketHeader,
@@ -216,10 +240,14 @@ class _FrameWriter:
         key = (str(header.session_uid), header.overall_frame_identifier)
         frame = self.pending.get(key)
         if frame is None:
-            frame = {"header": header, "received_at_ns": received_at_ns, "parts": {}, "raw_offset": raw_offset}
+            frame = {"header": header, "received_at_ns": received_at_ns, "parts": {}, "raw_offset": raw_offset,
+                     "raw_end_offset": raw_offset}
             self.pending[key] = frame
         else:
             frame["received_at_ns"] = min(frame["received_at_ns"], received_at_ns)
+            if raw_offset is not None:
+                frame["raw_offset"] = min(frame["raw_offset"], raw_offset) if frame.get("raw_offset") is not None else raw_offset
+                frame["raw_end_offset"] = max(frame.get("raw_end_offset") or raw_offset, raw_offset)
         frame["parts"][header.packet_id] = part
         while len(self.pending) > 256:
             self.flush_oldest()
@@ -238,9 +266,21 @@ class _FrameWriter:
         if not REQUIRED_FRAME_PARTS.issubset(parts):
             self.incomplete += 1
             self.incomplete_missing_parts[tuple(sorted(REQUIRED_FRAME_PARTS - parts.keys()))] += 1
+            if REQUIRED_FRAME_PARTS.intersection(parts):
+                lap = parts.get(2, {})
+                self.connection.execute("INSERT OR REPLACE INTO frame_quality_issues VALUES (?,?,?,?,?,?,?,?,?,0)",
+                    (uid, header.overall_frame_identifier, header.frame_identifier, lap.get("current_lap_num"),
+                     lap.get("lap_distance"), header.session_time, frame.get("raw_offset"), frame.get("raw_end_offset"),
+                     json.dumps(sorted(REQUIRED_FRAME_PARTS - parts.keys()))))
+                if self.on_issue is not None:
+                    self.on_issue(uid, lap.get("current_lap_num"))
             return
         row = _frame_row(frame, self.last_status.get(uid), self.last_damage.get(uid))
         self.connection.execute(self.insert_sql, tuple(row.get(name) for name in SAMPLE_COLUMNS))
+        self.connection.execute("INSERT OR REPLACE INTO sample_origins VALUES (?,?,?,?)",
+                                (uid, header.overall_frame_identifier, frame.get("raw_offset"), frame.get("raw_end_offset")))
+        self.connection.execute("DELETE FROM frame_quality_issues WHERE session_uid=? AND overall_frame_identifier=?",
+                                (uid, header.overall_frame_identifier))
         if self.on_sample is not None:
             self.on_sample(row, frame.get("raw_offset"))
         self.inserted += 1
@@ -272,6 +312,9 @@ def _write_exports(connection: sqlite3.Connection, output: Path) -> None:
         ("gear_shift_events", "session_uid, lap_number, event_index"),
         ("lap_metrics", "session_uid, lap_number"),
         ("session_metrics", "session_uid"),
+        ("lap_quality_details", "session_uid, lap_number"),
+        ("frame_quality_issues", "session_uid, overall_frame_identifier"),
+        ("quality_context_events", "session_uid, raw_offset"),
     ):
         cursor = connection.execute(f"SELECT * FROM {table} ORDER BY {order_by}")
         with (output / f"{table}.csv").open(
@@ -418,6 +461,7 @@ def build_analysis(
                 bounds[0] = min(bounds[0], archived.received_at_ns)
                 bounds[1] = max(bounds[1], archived.received_at_ns)
                 packet_counts[header.packet_id] += 1
+                writer.observe_context(header, archived.body, archived.offset)
 
                 if header.packet_id in PlayerTyreTracker.PACKET_IDS and archived.body is not None:
                     if uid not in tyre_trackers:
@@ -435,7 +479,7 @@ def build_analysis(
                 if header.packet_id in FRAME_PACKET_IDS:
                     part = archived.body
                     if part is not None:
-                        writer.add(header, archived.received_at_ns, part)
+                        writer.add(header, archived.received_at_ns, part, archived.offset)
                 elif header.packet_id == 1:
                     decoded = archived.body
                     if decoded is None:
@@ -458,6 +502,7 @@ def build_analysis(
                     if decoded["event_code"] == "FLBK":
                         writer.flush_all()
                         target = decoded["event_details"]["flashback_frame_identifier"]
+                        writer.supersede_quality(uid, target)
                         connection.execute(
                             """
                             UPDATE telemetry_samples SET superseded = 1

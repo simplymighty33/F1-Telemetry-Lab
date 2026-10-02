@@ -16,7 +16,8 @@ import zlib
 from analysis.build import FRAME_PACKET_IDS, _FrameWriter, _analysis_input, _archive_path, _lap_rows
 from analysis.events import analyze_driving_events
 from analysis.resample import resample_laps
-from analysis.schema import create_schema
+from analysis.schema import create_schema, ensure_quality_schema, SCHEMA_VERSION
+from analysis.quality import QUALITY_VERSION
 from decoder.header import PacketHeader
 from decoder.tyres import PlayerTyreTracker
 from storage.foundation import FOUNDATION_VERSION, foundation_path, iter_foundation
@@ -24,7 +25,7 @@ from decoder.stream import DECODER_VERSION
 from storage.lease import FileLease, LeaseBusyError
 
 INCREMENTAL_VERSION = 1
-DERIVED = ("lap_analysis", "resampled_lap_samples", "braking_events", "throttle_events", "gear_shift_events", "lap_metrics")
+DERIVED = ("lap_analysis", "resampled_lap_samples", "braking_events", "throttle_events", "gear_shift_events", "lap_metrics", "lap_quality_details")
 
 
 def analysis_path(source: Path) -> Path:
@@ -74,6 +75,11 @@ class IncrementalAnalysisStore:
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=FULL")
             con.execute("PRAGMA cache_size=-4096")
+            ensure_quality_schema(con)
+            if not con.execute("SELECT 1 FROM metadata WHERE key='quality_version'").fetchone():
+                con.execute("""INSERT OR IGNORE INTO sample_origins SELECT session_uid,overall_frame_identifier,
+                    raw_offset,raw_offset FROM telemetry_origins""")
+            con.commit()
             self._load()
         except BaseException:
             self.close()
@@ -92,14 +98,22 @@ class IncrementalAnalysisStore:
         if (s["source"], s["foundation"], s["step"]) != (str(self.source), str(self.foundation), self.distance_step_m):
             raise ValueError("分析来源或参数改变，请保留现有数据库并选择新输出目录。")
         self.dirty = {tuple(key) for key in s["dirty"]}
+        version = con.execute("SELECT value FROM metadata WHERE key='quality_version'").fetchone()
+        self.quality_upgrade = not version or json.loads(version[0]) != QUALITY_VERSION
+        if self.quality_upgrade:
+            self.dirty.update((uid, number) for uid, number in con.execute("SELECT session_uid,lap_number FROM laps"))
         self.trackers = {uid: (value[0], PlayerTyreTracker.restore(value[1])) for uid, value in s["trackers"].items()}
-        self.writer = _FrameWriter(con, self._sample)
+        self.writer = _FrameWriter(con, self._sample, self._issue)
         self.writer.last_status = s["status"]
         self.writer.last_damage = s["damage"]
         for encoded in s["frames"]:
             frame = {**encoded, "header": PacketHeader(**encoded["header"]),
                      "parts": {int(k): v for k, v in encoded["parts"].items()}}
             self.writer.pending[(str(frame["header"].session_uid), frame["header"].overall_frame_identifier)] = frame
+
+    def _issue(self, uid, number):
+        if number is not None:
+            self.dirty.add((uid, number))
 
     def _sample(self, row: dict, offset: int | None) -> None:
         key = (row["session_uid"], row["lap_number"])
@@ -121,6 +135,7 @@ class IncrementalAnalysisStore:
         bounds[1] = max(bounds[1], packet.received_at_ns)
         if body is None:
             return
+        self.writer.observe_context(h, body, packet.offset)
         if h.packet_id in PlayerTyreTracker.PACKET_IDS:
             if uid not in self.trackers or self.trackers[uid][0] != h.player_car_index:
                 self.trackers[uid] = (h.player_car_index, PlayerTyreTracker())
@@ -141,6 +156,7 @@ class IncrementalAnalysisStore:
             if body["event_code"] == "FLBK":
                 self.writer.flush_all()
                 target = body["event_details"]["flashback_frame_identifier"]
+                self.writer.supersede_quality(uid, target)
                 affected = {(uid, number) for number, in con.execute(
                     "SELECT DISTINCT lap_number FROM telemetry_samples WHERE session_uid=? AND superseded=0 AND frame_identifier>?", (uid, target))}
                 self.dirty.update(affected)
@@ -231,7 +247,7 @@ class IncrementalAnalysisStore:
                 if list(boundary or []) != s["last_packet"]:
                     raise ValueError("基础缓存来源发生变化，请使用新分析目录。")
             offsets = foundation.execute("SELECT raw_offset FROM packets WHERE raw_offset>? ORDER BY raw_offset LIMIT ?", (s["offset"], batch_size)).fetchall()
-            if not offsets and (not final or (not self.writer.pending and s.get("finalized"))):
+            if not offsets and not self.quality_upgrade and (not final or (not self.writer.pending and s.get("finalized"))):
                 try:
                     return {**read_summary(self.database), "processed_this_update": 0, "laps_updated": 0, "reused": True}
                 except ValueError:
@@ -266,7 +282,10 @@ class IncrementalAnalysisStore:
                                      "pending" if final else "processing"}
                 con.execute("INSERT OR REPLACE INTO incremental_checkpoint VALUES (1,?)", (zlib.compress(json.dumps(s, ensure_ascii=False).encode(), 1),))
                 con.execute("INSERT OR REPLACE INTO metadata VALUES ('incremental_summary',?)", (json.dumps(summary),))
+                con.execute("INSERT OR REPLACE INTO metadata VALUES ('quality_version',?)", (json.dumps(QUALITY_VERSION),))
+                con.execute("INSERT OR REPLACE INTO metadata VALUES ('schema_version',?)", (json.dumps(SCHEMA_VERSION),))
                 con.commit()
+                self.quality_upgrade = False
                 return summary
             except BaseException:
                 con.rollback()

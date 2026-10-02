@@ -5,6 +5,8 @@ import sys
 
 
 project_root = Path(SPECPATH).resolve().parent
+sys.path.insert(0, str(project_root))
+from collector import DISPLAY_VERSION
 
 analysis = Analysis(
     [str(project_root / "collector" / "gui_main.py")],
@@ -49,10 +51,12 @@ distribution = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="F1TelemetryLab-1.0",
+    name=f"F1TelemetryLab-{DISPLAY_VERSION}",
 )
 
 # Ship the player-facing guide beside the EXE on every build.
 import shutil
 shutil.copy2(project_root / "docs" / "F1TelemetryCollector-使用说明.txt",
-             Path(distribution.name) / "F1TelemetryLab-1.0-使用说明.txt")
+             Path(distribution.name) / f"F1TelemetryLab-{DISPLAY_VERSION}-使用说明.txt")
+shutil.copy2(project_root / "docs" / "USER_GUIDE.en.md",
+             Path(distribution.name) / f"F1TelemetryLab-{DISPLAY_VERSION}-User-Guide.en.md")
