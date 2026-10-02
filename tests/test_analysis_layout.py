@@ -41,11 +41,12 @@ class AnalysisLayoutTests(unittest.TestCase):
                         self.assertFalse(window.quality_frame.winfo_ismapped())
                         for widget in (window.heading_label, window.database_button, window.build_button,
                                        window.compress_button, window.session_combo, window.reference_combo,
-                                       window.compare_combo, window.segment_combo, window.quality_toggle,
+                                       window.compare_combo, window.segment_combo, window.quality_toggle, window.review_button,
                                        window.status_label, window.chart, window.metrics, window.hover_label):
                             self.assert_inside(root, widget)
                         self.assertGreater(window.chart.winfo_height(), 120)
-                        self.assertEqual(window._toolbar_columns, 3)
+                        self.assertEqual(window._toolbar_columns, 4)
+                        self.assertTrue(window.cancel_button.winfo_ismapped())
                     finally:
                         root.tk.call("tk", "scaling", previous)
                         for callback in root.tk.splitlist(root.tk.call("after", "info")):

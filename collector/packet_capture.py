@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import time
 from typing import Any
+from uuid import uuid4
 
 from collector.udp_receiver import ReceivedDatagram
 from decoder.header import HeaderDecodeError, decode_header
@@ -28,9 +29,10 @@ def _utc_iso(timestamp_ns: int | None = None) -> str:
     return timestamp.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
-def _create_session_directory(root: Path, local_now: datetime | None = None) -> Path:
+def _create_session_directory(root: Path, local_now: datetime | None = None,
+                              base_name: str | None = None) -> Path:
     now = local_now or datetime.now().astimezone()
-    base_name = f"session_{now:%Y%m%d_%H%M%S}"
+    base_name = base_name or f"session_{now:%Y%m%d_%H%M%S}"
     root.mkdir(parents=True, exist_ok=True)
     for suffix in range(10_000):
         name = base_name if suffix == 0 else f"{base_name}_{suffix:02d}"
@@ -58,9 +60,12 @@ class PacketCapture:
         raw_compression: str = "zlib",
         raw_compression_level: int = 1,
         raw_block_bytes: int = 256 * 1024,
+        directory_name: str | None = None,
+        game_session_uid: int | None = None,
     ) -> None:
-        self.session_directory = _create_session_directory(data_directory)
+        self.session_directory = _create_session_directory(data_directory, base_name=directory_name)
         self.session_id = self.session_directory.name
+        self.archive_identity = str(uuid4())
         self.start_time_ns = time.time_ns()
         self.start_monotonic_ns = time.monotonic_ns()
         self.end_time_ns: int | None = None
@@ -79,6 +84,13 @@ class PacketCapture:
         self.first_packet_monotonic_ns: int | None = None
         self.last_packet_monotonic_ns: int | None = None
         self._closed = False
+        self._suspended = False
+        self.game_session_uid = game_session_uid
+        self.context_ready = False
+        self.game_mode: str | None = None
+        self.context_history: list[dict[str, Any]] = []
+        self.naming_error: str | None = None
+        self.context_error: str | None = None
 
         self._lease = FileLease(self.session_directory / "capture.lock")
         try:
@@ -170,6 +182,49 @@ class PacketCapture:
         if self.packet_count % self.metadata_checkpoint_every == 0:
             self.checkpoint()
 
+    @property
+    def has_pending(self) -> bool:
+        return self.raw_writer.has_pending
+
+    def suspend(self) -> None:
+        if self._closed or self._suspended:
+            return
+        self.checkpoint()
+        self.raw_writer.suspend()
+        self.database.close()
+        self._suspended = True
+
+    def resume(self) -> None:
+        if self._closed:
+            raise RuntimeError("capture session is closed")
+        if not self._suspended:
+            return
+        try:
+            self.raw_writer.resume()
+            self.database.resume()
+        except BaseException:
+            try:
+                self.raw_writer.close()
+            finally:
+                self._lease.close()
+            raise
+        self._suspended = False
+
+    def relocate(self, target: Path) -> None:
+        """Label a provisional archive before any background consumer starts."""
+        if self.context_ready:
+            raise RuntimeError("cannot move an archive with active consumers")
+        self.suspend()
+        self._lease.close()  # Windows cannot rename a directory with this handle open.
+        try:
+            self.session_directory.rename(target)
+            self.session_directory = target
+            self.raw_writer.path = target / "raw_packets.bin"
+            self.database.path = target / "telemetry.db"
+        finally:
+            self._lease = FileLease(self.session_directory / "capture.lock")
+            self.resume()
+
     def _capture_duration_seconds(self) -> float:
         if self.first_packet_monotonic_ns is None or self.last_packet_monotonic_ns is None:
             return 0.0
@@ -217,6 +272,13 @@ class PacketCapture:
             "format": detected_format,
             "supported_formats": [2023, 2024, 2025, 2026],
             "session_id": self.session_id,
+            "game_session_uid": str(self.game_session_uid) if self.game_session_uid is not None else None,
+            "game_mode": self.game_mode,
+            "archive_directory": self.session_directory.name,
+            "archive_identity": self.archive_identity,
+            "context_history": self.context_history,
+            "naming_error": self.naming_error,
+            "context_error": self.context_error,
             "start_time": _utc_iso(self.start_time_ns),
             "end_time": _utc_iso(self.end_time_ns) if self.end_time_ns else None,
             "udp_port": self.udp_port,
@@ -242,15 +304,18 @@ class PacketCapture:
     def checkpoint(self) -> None:
         self.raw_writer.flush()
         self.database.flush()
+        self.database.update_session_context(self.session_id, self.track, self.session_type)
         self._write_metadata("recording")
 
     def close(self, status: str = "complete") -> dict[str, Any]:
         if self._closed:
             return self.summary(status)
+        self.resume()
         self.end_time_ns = time.time_ns()
         failure: BaseException | None = None
         try:
             self.raw_writer.flush()
+            self.database.update_session_context(self.session_id, self.track, self.session_type)
             self.database.end_session(
                 self.session_id, _utc_iso(self.end_time_ns), self.packet_count, status
             )

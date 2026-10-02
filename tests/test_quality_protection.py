@@ -20,7 +20,7 @@ from analysis.quality import inspect_source
 from analysis.resample import resample_laps
 from collector.foundation_worker import FoundationWorker
 from collector.analysis_worker import AnalysisWorker
-from collector.analysis_gui import AnalysisWindow
+from tests.gui_wait import ready_window as AnalysisWindow
 from collector.health import MIB, resource_decision
 from collector.packet_capture import PacketCapture
 from collector.pipeline import CapturePipeline, CaptureOverloadError
@@ -277,6 +277,8 @@ class QualityGuiTests(unittest.TestCase):
             root.withdraw()
             try:
                 window = AnalysisWindow(root, Path(temporary), database)
+                from tests.gui_wait import wait_for_tasks
+                wait_for_tasks(window)
                 self.assertIn("差额分解", window.region_details.get("1.0", "end"))
                 window.quality_tree.selection_set("1")
                 window._show_lap_quality()

@@ -13,9 +13,8 @@ from typing import Any
 
 from collector import __version__, APP_NAME, DISPLAY_VERSION
 from collector.logging_setup import close_logging, configure_logging
-from collector.packet_capture import PacketCapture
-from collector.foundation_worker import FoundationWorker
-from collector.analysis_worker import AnalysisWorker
+from collector.session_capture import SessionCapture
+from collector.session_workers import SessionDerivedWorker
 from collector.pipeline import CapturePipeline
 from collector.runtime import application_root, resolve_runtime_path
 from collector.settings import ConfigurationError, Settings, load_settings
@@ -52,7 +51,7 @@ def _format_duration(seconds: float) -> str:
 def _log_summary(
     logger: logging.Logger,
     summary: dict[str, Any],
-    session_directory: Path,
+    session_directory: Path | None,
     peak_queue_size: int,
 ) -> None:
     logger.info("")
@@ -119,15 +118,14 @@ def _run(
         timeout_seconds=settings.receiver_timeout_seconds,
     )
     pipeline: CapturePipeline | None = None
-    foundation: FoundationWorker | None = None
-    analysis: AnalysisWorker | None = None
+    foundation: SessionDerivedWorker | None = None
     failure: BaseException | None = None
     summary: dict[str, Any] | None = None
     started = time.monotonic()
     next_status = started + settings.status_interval_seconds
     try:
         receiver.open()
-        capture = PacketCapture(
+        capture = SessionCapture(
             data_directory,
             receiver.bound_port,
             track=args.track,
@@ -146,15 +144,8 @@ def _run(
         )
         pipeline.start()
         if settings.foundation_enabled:
-            foundation = FoundationWorker(
-                capture.session_directory / "raw_packets.bin",
-                lambda: capture.raw_writer.persisted_file_bytes,
-                logger,
-            )
+            foundation = SessionDerivedWorker(capture, logger, analysis_enabled=settings.analysis_enabled)
             foundation.start()
-            if settings.analysis_enabled:
-                analysis = AnalysisWorker(capture.session_directory / "raw_packets.bin", logger)
-                analysis.start()
         logger.info("=" * 52)
         logger.info(" %s %s", APP_NAME, DISPLAY_VERSION)
         logger.info("=" * 52)
@@ -200,8 +191,6 @@ def _run(
                 )
         if foundation is not None:
             foundation.close()
-        if analysis is not None:
-            analysis.close()
         shutdown_complete.set()
         console_handler.close()
         signal.signal(signal.SIGINT, previous_sigint)

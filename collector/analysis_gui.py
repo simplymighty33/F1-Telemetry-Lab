@@ -11,9 +11,10 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
-from analysis.incremental import update_analysis as build_analysis, analysis_path, read_summary
+from analysis.incremental import update_analysis as build_analysis, rebuild_analysis, analysis_path, read_summary
 from storage.raw_archive import ArchiveReadError
 from storage.archive_tools import convert_archive
+from storage.task_control import TaskControl
 from analysis.comparison import (
     AnalysisDatabaseError,
     AnalysisRepository,
@@ -24,6 +25,11 @@ from analysis.comparison import (
 from collector.runtime import application_root
 from collector import APP_NAME, DISPLAY_VERSION
 from collector.shutdown import ShutdownDialog
+from collector.latest_task import LatestTask
+from analysis.practice import practice_report
+from collector.audit_session import audit_session
+from collector.practice_gui import PracticeWindow, show_audit, condition_text
+from decoder.display import lap_display, session_label
 
 
 BACKGROUND = "#10141c"
@@ -50,11 +56,7 @@ def format_delta(milliseconds: int | float) -> str:
 
 
 def lap_label(lap: LapSummary) -> str:
-    if lap.tyre.tyre_lap_number is not None:
-        return (f"{lap.tyre.name} 第{lap.tyre.tyre_lap_number}圈（{format_lap_time(lap.lap_time_ms)}）"
-                f" · 第{lap.tyre.stint_number}套/总第{lap.lap_number}圈")
-    suffix = " · 最佳" if lap.delta_to_best_ms == 0 else f" · +{lap.delta_to_best_ms / 1000:.3f}"
-    return f"第 {lap.lap_number} 圈 · {format_lap_time(lap.lap_time_ms)}{suffix}"
+    return lap_display(lap.track, lap.session_type, lap.lap_number, lap.tyre, format_lap_time(lap.lap_time_ms))
 
 
 class ComparisonChart(tk.Canvas):
@@ -249,9 +251,20 @@ class AnalysisWindow:
         self._segment_labels: dict[str, int | None] = {"全部驾驶段": None}
         self._watched_database = database
         self._refresh_token = None
+        self._comparison_tasks = LatestTask()
+        self._comparison_key = None
+        self._rendered_key = None
         self._manual_session = False
         self._quality_has_rows = False
         self._quality_expanded: bool | None = None
+        self._review_cancel = threading.Event()
+        self._task_control = None
+        self._live_provider = None
+        self._live_session = None
+        self._live_uid = None
+        self._connection_text = "赛后浏览：打开已有分析，或从Session恢复分析"
+        self._lap_hint = None
+        self._lap_hint_after = None
 
         root.title(f"{APP_NAME} {DISPLAY_VERSION} · 单圈分析")
         screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
@@ -274,10 +287,12 @@ class AnalysisWindow:
         self.delta_card = tk.StringVar(value="圈速差：—")
         self._configure_styles()
         self._build_layout()
+        self._update_connection()
         root.bind("<Configure>", self._window_resized, add="+")
         if database is not None:
             self.load_database(database)
         root.after(1500, self._poll_live_analysis)
+        root.after(50, self._poll_comparison)
 
     def _configure_styles(self) -> None:
         style = ttk.Style(self.root)
@@ -307,6 +322,8 @@ class AnalysisWindow:
         self.database_button = self._button(self.toolbar, "打开分析数据库", self.choose_database)
         self.build_button = self._button(self.toolbar, "从 Session 生成分析", self.choose_session, accent=True)
         self.compress_button = self._button(self.toolbar, "压缩旧 Raw", self.choose_compress)
+        self.cancel_button = self._button(self.toolbar, "取消后台任务", self.cancel_task)
+        self.cancel_button.configure(state='disabled')
         self._toolbar_columns = None
         self.toolbar.bind("<Configure>", self._layout_toolbar)
 
@@ -315,6 +332,7 @@ class AnalysisWindow:
             anchor="w", font=("Segoe UI", 9),
         )
         self.database_label.grid(row=1, column=0, sticky="ew", padx=20)
+        self.database_label.bind("<Configure>", lambda e: self.database_label.configure(wraplength=max(200, e.width)))
 
         controls = tk.Frame(self.root, bg=PANEL, padx=14, pady=8)
         controls.grid(row=2, column=0, sticky="ew", padx=20, pady=(8, 8))
@@ -338,6 +356,10 @@ class AnalysisWindow:
             else:
                 self.compare_combo = combo
                 combo.bind("<<ComboboxSelected>>", self._selection_changed)
+            if variable is not self.session_var:
+                combo.bind("<Enter>", lambda e: self._schedule_lap_hint(e.widget))
+                combo.bind("<Leave>", lambda _e: self._hide_lap_hint())
+                combo.bind("<ButtonPress>", lambda _e: self._hide_lap_hint(), add="+")
 
         segment_controls = tk.Frame(self.root, bg=PANEL, padx=14, pady=5)
         segment_controls.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 8))
@@ -350,9 +372,11 @@ class AnalysisWindow:
         self.quality_toggle = self._button(segment_controls, "展开单圈状态", self._toggle_quality)
         self.quality_toggle.configure(state="disabled", pady=3)
         self.quality_toggle.grid(row=0, column=2, padx=(10, 0))
+        self.review_button = self._button(segment_controls, "练习复盘 / 审计", self.choose_practice)
+        self.review_button.grid(row=0, column=3, padx=(8, 0))
         self.quality_label = tk.Label(segment_controls, textvariable=self.quality_var, bg=PANEL,
                                       fg=MUTED, anchor="w", justify="left")
-        self.quality_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        self.quality_label.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(5, 0))
         segment_controls.bind("<Configure>", lambda e: self.quality_label.configure(wraplength=max(120, e.width - 28)))
         self.quality_frame = tk.Frame(self.root, bg=PANEL)
         self.quality_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 8))
@@ -436,13 +460,13 @@ class AnalysisWindow:
         self.status_label.bind("<Configure>", lambda e: self.status_label.configure(wraplength=max(160, e.width)))
 
     def _layout_toolbar(self, event) -> None:
-        buttons = (self.build_button, self.database_button, self.compress_button)
+        buttons = (self.build_button, self.database_button, self.compress_button, self.cancel_button)
         widths = [button.winfo_reqwidth() + 8 for button in buttons]
-        columns = 3 if sum(widths) <= event.width else 2 if max(widths) * 2 <= event.width else 1
+        columns = 4 if sum(widths) <= event.width else 2 if max(widths) * 2 <= event.width else 1
         if columns == self._toolbar_columns:
             return
         self._toolbar_columns = columns
-        for column in range(3):
+        for column in range(4):
             self.toolbar.columnconfigure(column, weight=1 if column < columns else 0, uniform="actions" if column < columns else "")
         for index, button in enumerate(buttons):
             button.grid(row=index // columns, column=index % columns, sticky="ew", padx=(0, 8), pady=2)
@@ -450,10 +474,70 @@ class AnalysisWindow:
     def _window_resized(self, event) -> None:
         if event.widget is self.root:
             self._sync_quality_visibility()
+            self.heading_label.configure(wraplength=max(250, event.width - 40))
 
     def _toggle_quality(self) -> None:
         self._quality_expanded = not bool(self.quality_frame.grid_info())
         self._sync_quality_visibility()
+
+    def _start_review(self, kind, producer):
+        if self._closing or not self.shutdown_ready():
+            return
+        self._review_cancel.clear()
+        self._task_control = None
+        self.cancel_button.configure(state='normal')
+        self._active_task = kind
+        self.review_button.configure(state="disabled")
+        self.build_button.configure(state="disabled")
+        self.compress_button.configure(state="disabled")
+        self.status_var.set("正在后台读取已提交快照，请稍候；不会重放或修改Raw。")
+        def worker():
+            try:
+                value = producer(self._review_cancel.is_set)
+            except Exception as error:
+                self._build_results.put(("error", error, None))
+            else:
+                self._build_results.put((kind, value, None))
+        self._worker = threading.Thread(target=worker, name=kind, daemon=False)
+        self._worker.start()
+        self.root.after(100, self._poll_build_result)
+
+    def choose_practice(self):
+        if self._closing or not self.shutdown_ready():
+            return
+        uid = self._session_labels.get(self.session_var.get())
+        if not self.repository or not uid:
+            if messagebox.askyesno("尚无分析数据", "要先选择已停止的Session进行长测审计吗？", parent=self.root):
+                self.choose_audit()
+            return
+        repository = self.repository
+        segment = self._segment_labels.get(self.segment_var.get())
+        reference = self._lap_labels.get(self.reference_var.get())
+        self._review_session_uid = uid
+        self._start_review("practice", lambda cancel: practice_report(repository, uid, segment, reference, cancel))
+
+    def choose_audit(self):
+        if self._closing or not self.shutdown_ready():
+            return
+        selected = filedialog.askdirectory(parent=self.root, title="选择已安全停止的Session（完整只读审计）", initialdir=self.data_directory)
+        if selected:
+            self._start_review("audit", lambda cancel: audit_session(Path(selected), cancel))
+
+    def _focus_practice_region(self, reference, candidate, bounds, expected_uid=None):
+        if self._closing:
+            return
+        if expected_uid is not None and self._session_labels.get(self.session_var.get()) != expected_uid:
+            self.status_var.set("当前会话已变化，请重新打开对应会话的复盘。")
+            return
+        labels = [next((label for label, key in self._lap_labels.items() if key == number), None) for number in (reference, candidate)]
+        if None in labels:
+            self.status_var.set("当前选择已变化，请重新打开复盘后定位。")
+            return
+        self.reference_var.set(labels[0])
+        self.compare_var.set(labels[1])
+        self._selection_changed()
+        self.chart.focus(bounds)
+        self.root.lift()
 
     def _sync_quality_visibility(self) -> None:
         expanded = self._quality_expanded if self._quality_expanded is not None else self.root.winfo_height() >= 780
@@ -477,7 +561,12 @@ class AnalysisWindow:
             filetypes=(("分析数据库", "*.db"), ("所有文件", "*.*")),
         )
         if selected and not self._closing:
-            self.load_database(Path(selected))
+            previous_provider, previous_text = self._live_provider, self._connection_text
+            self._live_provider = None
+            self._connection_text = "赛后浏览：只读查看已有分析结果"
+            if not self.load_database(Path(selected)):
+                self._live_provider, self._connection_text = previous_provider, previous_text
+                self._update_connection()
 
     def choose_session(self) -> None:
         if self._closing or not self.shutdown_ready():
@@ -492,12 +581,17 @@ class AnalysisWindow:
         if not (session / "raw_packets.bin").is_file():
             messagebox.showerror("无法生成分析", "所选目录中没有 raw_packets.bin。", parent=self.root)
             return
+        self._live_provider = None
+        self._connection_text = "所选Session：生成或继续分析；不自动切换到当前录制"
+        self._update_connection()
         self._start_session_build(session)
 
-    def _start_session_build(self, session: Path, recover_tail: bool = False) -> None:
+    def _start_session_build(self, session: Path, recover_tail: bool = False, independent: bool = False) -> None:
         if self._closing or not self.shutdown_ready():
             return
         self._active_task = "analysis"
+        self._task_control = TaskControl()
+        self.cancel_button.configure(state='normal')
         self._last_build_session = session
         self.build_button.configure(state="disabled", text="正在分析…")
         self.compress_button.configure(state="disabled")
@@ -506,10 +600,10 @@ class AnalysisWindow:
 
         def worker() -> None:
             try:
-                options = {"progress_every": 0}
+                options = {"progress_every": 0, 'control': self._task_control}
                 if recover_tail:
                     options["recover_tail"] = True
-                summary = build_analysis(session, **options)
+                summary = (rebuild_analysis if independent else build_analysis)(session, **options)
                 database = Path(summary["analysis_database"])
             except Exception as exc:
                 results.put(("error", exc, None))
@@ -553,11 +647,13 @@ class AnalysisWindow:
         self.build_button.configure(state="disabled")
         self.compress_button.configure(state="disabled", text="正在压缩…")
         self.status_var.set("正在压缩并逐包校验，完成后保存新副本…")
+        self._task_control = TaskControl()
+        self.cancel_button.configure(state='normal')
         results = self._build_results
 
         def worker() -> None:
             try:
-                result = convert_archive(source, target)
+                result = convert_archive(source, target, control=self._task_control)
             except Exception as exc:
                 results.put(("error", exc, None))
             else:
@@ -571,6 +667,10 @@ class AnalysisWindow:
         if self._closing or not self.root.winfo_exists():
             return
         if not self.shutdown_ready():
+            if self._task_control:
+                stage, completed, total = self._task_control.snapshot()
+                self.status_var.set(f'{stage}：{completed:,}' + (f' / {total:,}' if total else '')
+                                    + '｜可取消，Raw与已提交进度保留')
             self.root.after(100, self._poll_build_result)
             return
         try:
@@ -578,9 +678,21 @@ class AnalysisWindow:
         except queue.Empty:
             self.root.after(100, self._poll_build_result)
             return
+        self.cancel_button.configure(state='disabled')
         if state == "error":
             assert isinstance(value, Exception)
             self._build_failed(value)
+        elif state in ("practice", "audit"):
+            self.review_button.configure(state="normal")
+            self.build_button.configure(state="normal", text="从 Session 生成分析")
+            self.compress_button.configure(state="normal", text="压缩旧 Raw")
+            if state == "practice":
+                uid = self._review_session_uid
+                PracticeWindow(self.root, value, self.choose_audit,
+                    lambda reference, candidate, bounds: self._focus_practice_region(reference, candidate, bounds, uid))
+            else:
+                show_audit(self.root, value)
+            self.status_var.set("已生成只读复盘快照" if state == "practice" else "审计完成；摘要不包含身份、IP或私人路径")
         elif state == "archive":
             self.build_button.configure(state="normal", text="从 Session 生成分析")
             self.compress_button.configure(state="normal", text="压缩旧 Raw")
@@ -593,12 +705,31 @@ class AnalysisWindow:
             assert isinstance(value, Path) and isinstance(details, dict)
             self._build_complete(value, details)
 
+    def cancel_task(self):
+        if self._task_control:
+            self._task_control.cancel()
+        self._review_cancel.set()
+        self.cancel_button.configure(state='disabled')
+        self.status_var.set('正在安全取消后台任务；Raw采集不受影响…')
+
     def _build_failed(self, error: Exception) -> None:
         if self._closing:
             return
         self.build_button.configure(state="normal", text="从 Session 生成分析")
         self.compress_button.configure(state="normal", text="压缩旧 Raw")
+        self.review_button.configure(state="normal")
         self.status_var.set("分析生成失败")
+        if isinstance(error, InterruptedError):
+            self.status_var.set(str(error))
+            return
+        if (self._active_task == "analysis" and self._last_build_session is not None
+                and isinstance(error, ValueError) and any(word in str(error) for word in
+                ('算法', '分析来源', '档案身份', '基础缓存', '版本不兼容', 'incompatible foundation'))):
+            if messagebox.askyesno('保留旧结果并另建分析',
+                    '旧缓存的来源、版本或参数与本次不匹配。\n是否从Raw另建独立分析？'
+                    '\n旧数据库保留，可继续只读浏览；请先停止采集。', parent=self.root):
+                self._start_session_build(self._last_build_session, independent=True)
+                return
         if (self._active_task == "analysis" and self._last_build_session is not None
                 and isinstance(error, ArchiveReadError) and error.truncated):
             if messagebox.askyesno(
@@ -628,14 +759,19 @@ class AnalysisWindow:
         )
 
     def shutdown_ready(self) -> bool:
-        return self._worker is None or not self._worker.is_alive()
+        return (self._worker is None or not self._worker.is_alive()) and self._comparison_tasks.ready()
 
     def prepare_close(self) -> None:
         """Stop accepting work; current file/DB jobs are allowed to finish safely."""
         self._closing = True
+        self._review_cancel.set()
+        if self._task_control:
+            self._task_control.cancel()
+        self._comparison_tasks.close()
         if not self.root.winfo_exists():
             return
-        for button in (self.build_button, self.compress_button, self.database_button):
+        self._hide_lap_hint()
+        for button in (self.build_button, self.compress_button, self.database_button, self.review_button, self.cancel_button):
             button.configure(state="disabled")
         self.status_var.set("正在等待后台任务完成，随后安全关闭…")
 
@@ -647,14 +783,15 @@ class AnalysisWindow:
 
     def load_database(self, database: Path) -> bool:
         old_uid = self._session_labels.get(self.session_var.get())
-        if self.repository and self.repository.database != database.resolve():
-            old_uid = None
-            self._manual_session = False
-            self._segment_labels = {"全部驾驶段": None}
-            self.segment_var.set("全部驾驶段")
         try:
             repository = AnalysisRepository(database)
             sessions = repository.sessions()
+            # Validate the view's real query/JSON shapes before replacing any
+            # selection or repository. Table names alone are insufficient.
+            for session in sessions:
+                repository.laps(session.session_uid)
+                repository.quality(session.session_uid)
+                repository.segments(session.session_uid)
             if not sessions:
                 if not repository.has_segments:
                     raise AnalysisDatabaseError("数据库中没有可比较的完整单圈")
@@ -662,10 +799,21 @@ class AnalysisWindow:
             messagebox.showerror("无法打开分析", str(exc), parent=self.root)
             self.status_var.set("尚无可比较的完整单圈，或数据无法载入")
             return False
+        if self.repository and self.repository.database != database.resolve():
+            old_uid = None
+            self._manual_session = False
+            self._segment_labels = {"全部驾驶段": None}
+            self.segment_var.set("全部驾驶段")
+        try:
+            summary = read_summary(database)
+            self._refresh_token = self._summary_token(database, summary)
+        except (ValueError, sqlite3.Error, OSError):
+            self._refresh_token = (str(database.resolve()), 'readonly')
         self.repository = repository
         self._watched_database = database
         self.sessions = sessions
         self.database_var.set(f"分析文件：{repository.database}")
+        self._update_connection()
         self._session_labels = {f"会话 {index} · {session.label}": session.session_uid
                                 for index, session in enumerate(sessions, 1)}
         self.session_combo["values"] = tuple(self._session_labels)
@@ -674,9 +822,24 @@ class AnalysisWindow:
             default = ready_sessions[-1] if ready_sessions else sessions[-1]
             keep = old_uid in self._session_labels.values() and (self._manual_session or any(s.session_uid == old_uid and s.lap_count for s in sessions))
             chosen = old_uid if keep else default.session_uid
-            self.session_var.set(next(label for label, uid in self._session_labels.items() if uid == chosen))
-            self._session_selected()
+            if self._live_provider is not None and not self._manual_session:
+                chosen = str(self._live_uid) if self._live_uid is not None else None
+            selected = next((label for label, uid in self._session_labels.items() if uid == chosen), "")
+            self.session_var.set(selected)
+            if selected:
+                self._session_selected()
+            else:
+                self.laps = ()
+                self._lap_labels.clear()
+                self.reference_combo["values"] = ()
+                self.compare_combo["values"] = ()
+                self._clear_comparison()
+                self.quality_tree.delete(*self.quality_tree.get_children())
+                self._quality_has_rows = False
+                self._sync_quality_visibility()
+                self.quality_var.set("等待当前环节的已完成圈；可以手动选择历史会话")
         else:
+            self.laps = ()
             self._clear_comparison()
             self.session_var.set("")
             self.quality_tree.delete(*self.quality_tree.get_children())
@@ -691,6 +854,9 @@ class AnalysisWindow:
             self._manual_session = True
         session_uid = self._session_labels.get(self.session_var.get())
         if session_uid:
+            choice = next((s for s in self.sessions if s.session_uid == session_uid), None)
+            if choice:
+                self.heading_label.configure(text=session_label(choice.track, choice.session_type) + " · 单圈对比")
             self._load_segments(session_uid)
             self._load_laps(session_uid)
 
@@ -713,7 +879,9 @@ class AnalysisWindow:
             self._load_laps(uid)
 
     def _clear_comparison(self) -> None:
+        self._hide_lap_hint()
         self.comparison = None
+        self._comparison_key = self._rendered_key = None
         self.chart.set_comparison(None)
         self.metrics.delete(*self.metrics.get_children())
         self.region_tree.delete(*self.region_tree.get_children())
@@ -723,23 +891,121 @@ class AnalysisWindow:
         for variable, label in ((self.reference_card, "基准圈"), (self.compare_card, "对比圈"), (self.delta_card, "圈速差")):
             variable.set(label + "：—")
 
+    def _update_connection(self):
+        path = str(self.repository.database) if self.repository else "等待分析数据库"
+        # Preserve chart space on short/high-DPI screens; full path stays in repository.
+        self.database_var.set(self._connection_text if self._compact_screen else f"{self._connection_text}\n分析文件：{path}")
+
+    def _hide_lap_hint(self):
+        if self._lap_hint_after is not None:
+            self.root.after_cancel(self._lap_hint_after)
+            self._lap_hint_after = None
+        if self._lap_hint is not None:
+            self._lap_hint.destroy()
+            self._lap_hint = None
+
+    def _schedule_lap_hint(self, widget):
+        self._hide_lap_hint()
+        if not self._closing:
+            self._lap_hint_after = self.root.after(450, lambda: self._show_lap_hint(widget))
+
+    def _show_lap_hint(self, widget):
+        self._lap_hint_after = None
+        if self._closing or not widget.get():
+            return
+        self._lap_hint = tk.Toplevel(self.root)
+        self._lap_hint.overrideredirect(True)
+        tk.Label(self._lap_hint, text=widget.get(), bg=PANEL_ALT, fg=TEXT, padx=10, pady=8,
+                 justify="left", wraplength=min(700, self.root.winfo_screenwidth() - 60)).pack()
+        self._lap_hint.update_idletasks()
+        x = min(max(0, widget.winfo_rootx()), max(0, self.root.winfo_screenwidth() - self._lap_hint.winfo_reqwidth()))
+        y = min(max(0, widget.winfo_rooty() + widget.winfo_height()), max(0, self.root.winfo_screenheight() - self._lap_hint.winfo_reqheight()))
+        self._lap_hint.geometry(f"+{x}+{y}")
+
+    def attach_live(self, provider):
+        self._live_provider = provider
+        self._sync_live_connection()
+
+    def _sync_live_connection(self):
+        snapshot = self._live_provider()
+        session = snapshot.session_directory
+        if snapshot.session_uid != self._live_uid:
+            self._live_uid = snapshot.session_uid
+            self._refresh_token = None
+            if not self._manual_session:
+                self.laps = ()
+                self._lap_labels.clear()
+                self.reference_combo["values"] = ()
+                self.compare_combo["values"] = ()
+                self._clear_comparison()
+                self.session_var.set("")
+                self.quality_tree.delete(*self.quality_tree.get_children())
+                self._quality_has_rows = False
+                self._sync_quality_visibility()
+        if session != self._live_session:
+            self._live_session = session
+            self._watched_database = analysis_path(session) if session else None
+            self._refresh_token = None
+            self._manual_session = False
+            self.repository = None
+            self.sessions = ()
+            self.laps = ()
+            self._session_labels.clear()
+            self.session_combo["values"] = ()
+            self.session_var.set("")
+            self._segment_labels = {"全部驾驶段": None}
+            self.segment_combo["values"] = ("全部驾驶段",)
+            self.segment_var.set("全部驾驶段")
+            self._lap_labels.clear()
+            self.reference_combo["values"] = ()
+            self.compare_combo["values"] = ()
+            self._clear_comparison()
+            self.quality_tree.delete(*self.quality_tree.get_children())
+            self._quality_has_rows = False
+            self._sync_quality_visibility()
+        if snapshot.analysis_error or snapshot.foundation_error:
+            state = "后台分析暂停；Raw采集独立继续，停止后可从Session恢复"
+        elif snapshot.analysis_state == "disabled":
+            state = "自动分析未开启；可在停止后从Session生成分析"
+        elif snapshot.analysis_state == "throttled" or snapshot.foundation_state == "throttled":
+            state = "资源压力：后台整理暂缓，优先保全Raw"
+        elif snapshot.state in {"stopped", "error"}:
+            state = "采集已停止；显示已有结果，未处理部分可从Session补齐"
+        elif not session:
+            state = "正在连接当前录制，等待采集器创建Session"
+        elif self._manual_session:
+            state = "已连接录制；当前手动查看历史会话，结果自动刷新"
+        elif not self.laps:
+            state = "已连接当前录制；等待完整有效圈和后台提交，无需导入Raw"
+        else:
+            state = "已连接当前录制；自动刷新已完成圈，无需导入Raw"
+        self._connection_text = state
+        self._update_connection()
+        if not self.repository or not self.session_var.get():
+            self.heading_label.configure(text=session_label(snapshot.track_name, snapshot.session_type) + " · 单圈对比")
+
     def _poll_live_analysis(self) -> None:
         if self._closing or not self.root.winfo_exists():
             return
+        if self._live_provider is not None:
+            self._sync_live_connection()
         database = self._watched_database
         if database and database.is_file() and self.shutdown_ready():
             try:
                 summary = read_summary(database)
-                token = (str(database), summary["total_raw_packets"], summary["status"])
+                token = self._summary_token(database, summary)
                 if token != self._refresh_token:
                     self.load_database(database)
                     self._refresh_token = token
             except (ValueError, sqlite3.Error, OSError):
                 pass  # Legacy databases do not contain incremental metadata.
+        if self._live_provider is not None:
+            self._sync_live_connection()
         self.root.after(1500, self._poll_live_analysis)
 
     def _load_laps(self, session_uid: str) -> None:
         assert self.repository is not None
+        self._hide_lap_hint()
         old_reference = self._lap_labels.get(self.reference_var.get())
         old_candidate = self._lap_labels.get(self.compare_var.get())
         quality = self.repository.quality(session_uid, self._segment_labels.get(self.segment_var.get()))
@@ -756,7 +1022,7 @@ class AnalysisWindow:
             details = row.get("details") or {}
             warning_count = details.get("issue_count", len(details.get("issues", []))) + details.get("incomplete_frame_count", len(details.get("incomplete_frames", [])))
             title = titles.get(row["quality_status"], row["quality_status"])
-            self.quality_tree.insert("", "end", iid=str(row["lap_number"]), values=(row["lap_number"], format_lap_time(row["lap_time_ms"]),
+            self.quality_tree.insert("", "end", iid=str(row["lap_number"]), values=(f"总第{row['lap_number']}圈", format_lap_time(row["lap_time_ms"]),
                 title + (f" / {warning_count}项待核验" if warning_count else ""),
                 "—" if row["coverage_ratio"] is None else f"{row['coverage_ratio'] * 100:.1f}%"))
         self._quality_rows = {str(row["lap_number"]): row for row in quality}
@@ -779,6 +1045,7 @@ class AnalysisWindow:
         self._refresh_comparison(session_uid)
 
     def _selection_changed(self, _event=None) -> None:
+        self._hide_lap_hint()
         session_uid = self._session_labels.get(self.session_var.get())
         if session_uid:
             self._refresh_comparison(session_uid)
@@ -790,7 +1057,7 @@ class AnalysisWindow:
             return
         details = row.get("details")
         window = tk.Toplevel(self.root)
-        window.title(f"第 {row['lap_number']} 圈 · 数据质量")
+        window.title(f"总第{row['lap_number']}圈 · 数据质量")
         window.geometry(f"{min(760, self.root.winfo_screenwidth()-80)}x{min(540, self.root.winfo_screenheight()-100)}")
         text = tk.Text(window, wrap="word", bg=PANEL, fg=TEXT, padx=16, pady=16)
         scroll = ttk.Scrollbar(window, command=text.yview)
@@ -813,7 +1080,7 @@ class AnalysisWindow:
                 content += f"{names.get(issue['kind'], issue['kind'])}：{issue['start_m']:.1f}–{issue['end_m']:.1f} m，游戏时间间隔 {issue.get('game_elapsed_ms')} ms\n"
             frames = details.get("incomplete_frames", [])
             content += f"\n未能拼接的帧：{details.get('incomplete_frame_count', len(frames))}（最多列出200条）\n"
-            labels = {0: "运动", 2: "圈速", 6: "车辆遥测"}
+            labels = {0: "运动", 2: "圈速", 6: "车辆遥测", 'identity_mismatch': '玩家/协议/帧身份不一致'}
             for frame in frames:
                 content += f"帧 {frame['frame']}：缺少 {', '.join(labels.get(p, str(p)) for p in frame['missing_parts'])}；Raw {frame['raw_start_offset']}–{frame['raw_end_offset']}\n"
             content += "\n游戏状态变化（最多50条）：\n"
@@ -832,23 +1099,68 @@ class AnalysisWindow:
         comparison_lap = self._lap_labels.get(self.compare_var.get())
         if self.repository is None or reference_lap is None or comparison_lap is None:
             return
-        try:
-            comparison = self.repository.comparison(session_uid, reference_lap, comparison_lap)
-        except AnalysisDatabaseError as exc:
-            self._clear_comparison()
-            self.status_var.set(str(exc))
+        key = (str(self.repository.database), self._refresh_token, session_uid, reference_lap, comparison_lap)
+        if key == self._comparison_key:
             return
+        if self._rendered_key and self._rendered_key[2:] != key[2:]:
+            self.comparison = None
+            self._rendered_key = None
+            self.chart.set_comparison(None)
+            self.metrics.delete(*self.metrics.get_children())
+            self.region_tree.delete(*self.region_tree.get_children())
+            self._set_region_details('正在计算新选择；旧圈图表已清除。')
+        self._comparison_key = key
+        repository = self.repository
+        self._comparison_tasks.request(key, lambda: repository.comparison(session_uid, reference_lap, comparison_lap))
+        self.status_var.set("正在后台计算单圈对比…")
+
+    @staticmethod
+    def _summary_token(database, summary):
+        return (str(database.resolve()), summary.get('analysis_revision',
+                (summary.get('final_lap_count'), summary.get('laps_resampled'), summary.get('flashback_count'))))
+
+    def _poll_comparison(self):
+        if self._closing or not self.root.winfo_exists():
+            return
+        result = self._comparison_tasks.take()
+        if result is not None:
+            key, comparison, error = result
+            if key == self._comparison_key:
+                if error:
+                    self._clear_comparison()
+                    self.status_var.set(str(error))
+                else:
+                    self._display_comparison(key, comparison)
+        self.root.after(50, self._poll_comparison)
+
+    def _display_comparison(self, key, comparison):
+        focus = self.chart.focus_range if self._rendered_key and self._rendered_key[2:] == key[2:] else None
+        region_identity = None
+        selection = self.region_tree.selection()
+        if focus is not None and selection and self.comparison:
+            index = int(selection[0])
+            if index < len(self.comparison.regions):
+                region = self.comparison.regions[index]
+                region_identity = (region.start_m, region.end_m, region.kind)
+        self._rendered_key = key
         self.comparison = comparison
         self.chart.set_comparison(comparison)
         reference = comparison.reference
         candidate = comparison.comparison
-        self.reference_card.set(f"基准圈  {format_lap_time(reference.lap_time_ms)}")
-        self.compare_card.set(f"对比圈  {format_lap_time(candidate.lap_time_ms)}")
+        self.reference_card.set(f"基准 总第{reference.lap_number}圈  {format_lap_time(reference.lap_time_ms)}")
+        self.compare_card.set(f"对比 总第{candidate.lap_number}圈  {format_lap_time(candidate.lap_time_ms)}")
         self.delta_card.set(f"圈速差  {format_delta(candidate.lap_time_ms - reference.lap_time_ms)}")
         self._render_metrics(reference, candidate)
         self._render_regions()
+        if focus is not None:
+            self.chart.focus(focus)
+            for index, region in enumerate(comparison.regions):
+                if (region.start_m, region.end_m, region.kind) == region_identity:
+                    self.region_tree.selection_set(str(index))
+                    self._region_selected()
+                    break
         self.status_var.set(
-            f"绿色：第 {reference.lap_number} 圈（基准）　蓝色：第 {candidate.lap_number} 圈（对比）　"
+            f"绿色：总第{reference.lap_number}圈（基准）　蓝色：总第{candidate.lap_number}圈（对比）　"
             "虚线表示制动起点；时间区间页可查看损失位置与操作对照"
         )
 
@@ -936,6 +1248,12 @@ class AnalysisWindow:
         )
         for row in rows:
             self.metrics.insert("", "end", values=row)
+        if self.comparison and len(self.comparison.conditions) == 2:
+            a, b = self.comparison.conditions
+            for field, title, unit in (("fuel_start_kg", "起始燃油（核验）", "kg"),
+                                      ("tyre_inner_median_c", "平均内温中位", "°C"),
+                                      ("ers_median_mj", "ERS储能中位", "MJ")):
+                self.metrics.insert("", "end", values=(title, condition_text(a[field], unit), condition_text(b[field], unit)))
 
 
 def open_analysis_viewer(
@@ -943,6 +1261,7 @@ def open_analysis_viewer(
     data_directory: Path,
     database: Path | None = None,
     session: Path | None = None,
+    live_provider=None,
 ) -> AnalysisWindow:
     window = tk.Toplevel(parent)
     if session is not None:
@@ -951,6 +1270,8 @@ def open_analysis_viewer(
         database = find_latest_analysis_database(data_directory)
     viewer = AnalysisWindow(window, data_directory, database if database and database.is_file() else None)
     viewer._watched_database = database
+    if live_provider is not None:
+        viewer.attach_live(live_provider)
     return viewer
 
 

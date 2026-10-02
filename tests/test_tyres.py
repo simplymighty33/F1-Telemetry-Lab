@@ -200,7 +200,7 @@ class TyreTests(unittest.TestCase):
                 lap = repo.laps("77")[0]
                 records.append(asdict(lap.tyre))
                 self.assertEqual(lap.tyre.wear_percent, 9)
-                self.assertIn("软胎 第1圈（0:10.000）", lap_label(lap))
+                self.assertIn("软胎（磨损9.0%）｜0:10.000", lap_label(lap))
                 self.assertIn("总第1圈", lap_label(lap))
             self.assertEqual(records[0], records[1])
             self.assertEqual(records[0], asdict(expected))
@@ -211,7 +211,7 @@ class TyreTests(unittest.TestCase):
                 connection.commit()
             old = AnalysisRepository(database)
             self.assertFalse(old.has_tyre_metadata)
-            self.assertIn("第 1 圈", lap_label(old.laps("77")[0]))
+            self.assertIn("总第1圈", lap_label(old.laps("77")[0]))
 
 
 if __name__ == "__main__":

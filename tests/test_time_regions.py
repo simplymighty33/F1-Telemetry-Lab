@@ -14,7 +14,7 @@ from analysis.quality import inspect_source
 from analysis.regions import time_regions
 from analysis.resample import _source_rows, resample_laps
 from analysis.schema import create_schema
-from collector.analysis_gui import AnalysisWindow
+from tests.gui_wait import ready_window as AnalysisWindow
 
 
 def point(distance, delta=0, **changes):
@@ -137,7 +137,8 @@ class RegionRepositoryTests(unittest.TestCase):
         comparison = AnalysisRepository(self.database).comparison("7", 1, 2)
         self.assertAlmostEqual(comparison.observed_delta_ms, 1000)
         self.assertAlmostEqual(comparison.unattributed_delta_ms, 0)
-        self.assertEqual(comparison.warnings, ())
+        self.assertIn("燃油条件未知/来源未核验", comparison.warnings)
+        self.assertFalse(any("不可靠区间" in warning for warning in comparison.warnings))
         self.assertEqual(before, hashlib.sha256(self.database.read_bytes()).digest())
 
     def test_legacy_interpolation_cannot_hide_original_gap(self):

@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from analysis.incremental import update_analysis, read_summary
 from analysis.comparison import AnalysisRepository
-from collector.analysis_gui import AnalysisWindow
+from tests.gui_wait import ready_window as AnalysisWindow, wait_for_tasks
 from tests.test_foundation import write_packets
 from tests.test_analysis_pipeline import session_packet, motion_packet, lap_packet, telemetry_packet
 from tests.test_tyres import history_packet, player_packet
@@ -50,6 +50,7 @@ class IncrementalGuiTests(unittest.TestCase):
             if key is not None:
                 window.segment_var.set(label)
                 window._segment_selected()
+                wait_for_tasks(window)
                 self.assertEqual(len(window.laps), 1)
                 self.assertEqual(len(window.quality_tree.get_children()), 1)
                 self.assertIsNotNone(window.comparison)

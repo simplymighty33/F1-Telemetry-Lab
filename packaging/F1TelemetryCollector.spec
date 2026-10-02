@@ -60,3 +60,5 @@ shutil.copy2(project_root / "docs" / "F1TelemetryCollector-使用说明.txt",
              Path(distribution.name) / f"F1TelemetryLab-{DISPLAY_VERSION}-使用说明.txt")
 shutil.copy2(project_root / "docs" / "USER_GUIDE.en.md",
              Path(distribution.name) / f"F1TelemetryLab-{DISPLAY_VERSION}-User-Guide.en.md")
+for document in ('RELEASE_1.0.3.md', 'ENDURANCE_1.0.3.md'):
+    shutil.copy2(project_root / 'docs' / document, Path(distribution.name) / document)

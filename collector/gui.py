@@ -17,6 +17,7 @@ from collector.runtime import application_root, resolve_runtime_path
 from collector.service import CollectorService, CollectorSnapshot
 from collector.settings import ConfigurationError, load_settings, parse_user_udp_port, save_udp_port
 from collector.shutdown import ShutdownDialog
+from decoder.display import session_label, track_label, stage_label, tyre_label
 
 
 BACKGROUND = "#10141c"
@@ -79,6 +80,7 @@ class CollectorWindow:
         self._logger_closed = False
         self._status_color = AMBER
         self._displayed_session_uid: int | None = None
+        self._displayed_context = None
 
         root.title(f"{APP_NAME} {DISPLAY_VERSION}")
         root.minsize(760, 520)
@@ -94,6 +96,7 @@ class CollectorWindow:
         self.game_mode_var = tk.StringVar(value="游戏模式：等待数据")
         self.session_type_var = tk.StringVar(value="比赛阶段：—")
         self.track_var = tk.StringVar(value="赛道：—")
+        self.lap_heading_var = tk.StringVar(value="赛道未知 · 环节未知 · 玩家逐圈记录")
         self.error_var = tk.StringVar(value="")
         self.port_var = tk.StringVar(value=str(service.port))
 
@@ -195,13 +198,16 @@ class CollectorWindow:
         content = tk.Frame(self.root, bg=BACKGROUND)
         self.content = content
         content.grid(row=3, column=0, sticky="nsew", padx=28)
-        tk.Label(
+        self.lap_heading = tk.Label(
             content,
-            text="玩家逐圈记录",
+            textvariable=self.lap_heading_var,
             bg=BACKGROUND,
             fg=TEXT,
             font=("Segoe UI Semibold", 13),
-        ).pack(anchor="w", pady=(2, 8))
+            justify="left", anchor="w",
+        )
+        self.lap_heading.pack(fill="x", pady=(2, 8))
+        self.lap_heading.bind("<Configure>", lambda e: self.lap_heading.configure(wraplength=max(200, e.width)))
         table_frame = tk.Frame(content, bg=PANEL)
         table_frame.pack(fill="both", expand=True)
         self.lap_table = ttk.Treeview(
@@ -211,7 +217,7 @@ class CollectorWindow:
             style="Telemetry.Treeview",
             height=6,
         )
-        self.lap_table.heading("lap", text="圈数")
+        self.lap_table.heading("lap", text="总圈数")
         self.lap_table.heading("tyre", text="轮胎 / 磨损")
         self.lap_table.heading("tyre_lap", text="胎组圈数")
         self.lap_table.heading("time", text="圈速")
@@ -340,8 +346,12 @@ class CollectorWindow:
         updates = self.service.drain_lap_updates()
         if updates:
             update = updates[-1]
-            self._displayed_session_uid = update.session_uid
-            self._render_laps(update.laps)
+            # Session may change between reading the UI snapshot and draining history.
+            snapshot = self.service.snapshot()
+            self._render_snapshot(snapshot)
+            if snapshot.session_uid is None or snapshot.session_uid == update.session_uid:
+                self._displayed_session_uid = update.session_uid
+                self._render_laps(update.laps)
         if not self._closing:
             self.root.after(200, self._poll)
 
@@ -351,8 +361,14 @@ class CollectorWindow:
             self.game_mode_var,
             f"游戏：{getattr(snapshot, 'game_name', '等待数据')}　模式：{snapshot.game_mode}",
         )
-        _set_if_changed(self.session_type_var, f"比赛阶段：{snapshot.session_type}")
-        _set_if_changed(self.track_var, f"赛道：{snapshot.track_name}")
+        _set_if_changed(self.session_type_var, f"比赛阶段：{stage_label(snapshot.session_type)}")
+        _set_if_changed(self.track_var, f"赛道：{track_label(snapshot.track_name)}")
+        _set_if_changed(self.lap_heading_var, session_label(snapshot.track_name, snapshot.session_type) + " · 玩家逐圈记录")
+        context = (snapshot.session_uid, snapshot.player_car_index, snapshot.packet_format)
+        if context != self._displayed_context:
+            self._displayed_context = context
+            self._displayed_session_uid = snapshot.session_uid
+            self._render_laps(())
         if snapshot.last_packet_at_ns is None:
             _set_if_changed(self.last_packet_var, "最近数据：尚未收到游戏 UDP 数据")
         else:
@@ -364,11 +380,13 @@ class CollectorWindow:
             _set_if_changed(self.session_var, f"Session：{snapshot.session_directory}")
         foundation_error = getattr(snapshot, "foundation_error", None)
         analysis_error = getattr(snapshot, "analysis_error", None)
+        display_error = getattr(snapshot, "display_error", None)
         health = getattr(snapshot, "health_warnings", ())
         self.error_label.configure(fg=RED if snapshot.error or foundation_error or analysis_error else AMBER)
         _set_if_changed(self.error_var, f"错误：{snapshot.error}" if snapshot.error else (
             "基础数据整理暂停，Raw 采集仍继续；停止后可恢复处理。" if foundation_error else
             "单圈分析暂停，Raw 采集仍继续；从 Session 可恢复处理。" if analysis_error else
+            display_error if display_error else
             "；".join(health) if isinstance(health, tuple) else ""
         ))
         colors = {
@@ -387,19 +405,22 @@ class CollectorWindow:
             self.close_button.configure(text="关闭窗口")
 
     def _render_laps(self, laps: tuple) -> None:
-        self.lap_table.delete(*self.lap_table.get_children())
+        top = self.lap_table.yview()[0]
+        following = top <= .001
+        visible = self.lap_table.identify_row(35)
+        wanted = {f"lap-{lap.lap_number}" for lap in laps}
+        for identity in self.lap_table.get_children():
+            if identity not in wanted:
+                self.lap_table.delete(identity)
         valid_times = [lap.lap_time_ms for lap in laps if lap.lap_valid]
         best_lap_ms = min(valid_times) if valid_times else None
-        for lap in reversed(laps):
+        for position, lap in enumerate(reversed(laps)):
             tag = "invalid" if not lap.lap_valid else (
                 "best" if lap.lap_time_ms == best_lap_ms else ""
             )
-            self.lap_table.insert(
-                "",
-                "end",
-                values=(
-                    f"第 {lap.lap_number} 圈",
-                    lap.tyre.label,
+            values = (
+                    f"总第{lap.lap_number}圈",
+                    tyre_label(lap.tyre),
                     f"第 {lap.tyre.stint_number} 套 · 第 {lap.tyre.tyre_lap_number} 圈"
                     if lap.tyre.tyre_lap_number is not None else "—",
                     format_lap_time(lap.lap_time_ms),
@@ -407,10 +428,20 @@ class CollectorWindow:
                     format_sector_time(lap.sector2_ms),
                     format_sector_time(lap.sector3_ms),
                     "有效" if lap.lap_valid else "无效",
-                ),
-                tags=(tag,),
-            )
-        self.lap_table.yview_moveto(0.0)
+                )
+            identity = f"lap-{lap.lap_number}"
+            if self.lap_table.exists(identity):
+                self.lap_table.item(identity, values=values, tags=(tag,))
+                self.lap_table.move(identity, '', position)
+            else:
+                self.lap_table.insert('', position, iid=identity, values=values, tags=(tag,))
+        if following:
+            self.lap_table.yview_moveto(0.0)
+        elif visible and self.lap_table.exists(visible):
+            index = self.lap_table.index(visible)
+            self.lap_table.yview_moveto(index/max(1, len(laps)))
+        else:
+            self.lap_table.yview_moveto(top)
 
     def request_close(self) -> None:
         if self._closing:
@@ -485,6 +516,7 @@ class CollectorWindow:
         self.service = CollectorService(settings, self.data_directory, self.logger,
                                         host=old.host, port=self._pending_port)
         self._displayed_session_uid = None
+        self._displayed_context = None
         self._render_laps(())
         self.last_packet_var.set("最近数据：尚未收到游戏 UDP 数据")
         self.session_var.set("正在创建新 Session…")
@@ -503,7 +535,8 @@ class CollectorWindow:
 
         self._analysis_windows = [window for window in self._analysis_windows if window.root.winfo_exists()]
         current_session = self.service.snapshot().session_directory
-        self._analysis_windows.append(open_analysis_viewer(self.root, self.data_directory, session=current_session))
+        self._analysis_windows.append(open_analysis_viewer(self.root, self.data_directory, session=current_session,
+                                                         live_provider=lambda: self.service.snapshot()))
 
     def _finish_close(self) -> None:
         if not self._logger_closed:

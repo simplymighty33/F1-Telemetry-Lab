@@ -33,7 +33,15 @@ from storage.raw_writer import iter_archive
 
 FRAME_PACKET_IDS = {0, 2, 6, 7, 10, 13}
 REQUIRED_FRAME_PARTS = {0, 2, 6}
-ANALYSIS_ENGINE_VERSION = 7
+ANALYSIS_ENGINE_VERSION = 9
+
+
+def algorithm_contract(distance_step_m: float, include_invalid: bool = False) -> dict:
+    """One compatibility vocabulary for full and incremental derived results."""
+    return {"engine": ANALYSIS_ENGINE_VERSION, "decoder": DECODER_VERSION,
+            "schema": SCHEMA_VERSION, "events": EVENT_DETECTION_VERSION,
+            "thresholds": EVENT_THRESHOLDS, "distance_step_m": distance_step_m,
+            "include_invalid": include_invalid}
 
 SAMPLE_COLUMNS = (
     "session_uid", "overall_frame_identifier", "frame_identifier",
@@ -203,6 +211,7 @@ class _FrameWriter:
         self.last_damage: dict[str, dict[str, Any]] = {}
         self.inserted = 0
         self.incomplete = 0
+        self.identity_mismatches = 0
         self.incomplete_missing_parts: Counter[tuple[int, ...]] = Counter()
         placeholders = ",".join("?" for _ in SAMPLE_COLUMNS)
         self.insert_sql = (
@@ -244,11 +253,16 @@ class _FrameWriter:
                      "raw_end_offset": raw_offset}
             self.pending[key] = frame
         else:
+            original = frame["header"]
+            if (original.packet_format, original.player_car_index, original.frame_identifier) != (
+                    header.packet_format, header.player_car_index, header.frame_identifier):
+                frame["identity_mismatch"] = True
             frame["received_at_ns"] = min(frame["received_at_ns"], received_at_ns)
             if raw_offset is not None:
                 frame["raw_offset"] = min(frame["raw_offset"], raw_offset) if frame.get("raw_offset") is not None else raw_offset
                 frame["raw_end_offset"] = max(frame.get("raw_end_offset") or raw_offset, raw_offset)
         frame["parts"][header.packet_id] = part
+        frame.setdefault("condition_players", {})[str(header.packet_id)] = header.player_car_index
         while len(self.pending) > 256:
             self.flush_oldest()
 
@@ -259,24 +273,45 @@ class _FrameWriter:
         header: PacketHeader = frame["header"]
         uid = str(header.session_uid)
         parts = frame["parts"]
-        if 7 in parts:
-            self.last_status[uid] = parts[7]
-        if 10 in parts:
-            self.last_damage[uid] = parts[10]
-        if not REQUIRED_FRAME_PARTS.issubset(parts):
+        identity = f"{uid}:{header.packet_format}:{header.player_car_index}"
+        invalid_identity = frame.get("identity_mismatch", False)
+        if not invalid_identity:
+            if 7 in parts:
+                self.last_status[identity] = {**parts[7], '_observed_frame': header.frame_identifier,
+                                             '_observed_time': header.session_time}
+            if 10 in parts:
+                self.last_damage[identity] = {**parts[10], '_observed_frame': header.frame_identifier,
+                                             '_observed_time': header.session_time}
+        if invalid_identity or not REQUIRED_FRAME_PARTS.issubset(parts):
             self.incomplete += 1
-            self.incomplete_missing_parts[tuple(sorted(REQUIRED_FRAME_PARTS - parts.keys()))] += 1
+            missing = tuple(sorted(REQUIRED_FRAME_PARTS - parts.keys()))
+            if missing:
+                self.incomplete_missing_parts[missing] += 1
+            if invalid_identity:
+                self.identity_mismatches += 1
             if REQUIRED_FRAME_PARTS.intersection(parts):
                 lap = parts.get(2, {})
                 self.connection.execute("INSERT OR REPLACE INTO frame_quality_issues VALUES (?,?,?,?,?,?,?,?,?,0)",
                     (uid, header.overall_frame_identifier, header.frame_identifier, lap.get("current_lap_num"),
                      lap.get("lap_distance"), header.session_time, frame.get("raw_offset"), frame.get("raw_end_offset"),
-                     json.dumps(sorted(REQUIRED_FRAME_PARTS - parts.keys()))))
+                     json.dumps(["identity_mismatch"] if invalid_identity else sorted(REQUIRED_FRAME_PARTS - parts.keys()))))
                 if self.on_issue is not None:
                     self.on_issue(uid, lap.get("current_lap_num"))
             return
-        row = _frame_row(frame, self.last_status.get(uid), self.last_damage.get(uid))
+        def prior(cache):
+            record = cache.get(identity)
+            if record is not None and (record.get('_observed_frame', -1) > header.frame_identifier
+                    or record.get('_observed_time', -1) > header.session_time):
+                return None  # Late/out-of-order frames and Flashback cannot use future state.
+            return record
+        row = _frame_row(frame, prior(self.last_status), prior(self.last_damage))
         self.connection.execute(self.insert_sql, tuple(row.get(name) for name in SAMPLE_COLUMNS))
+        players = frame.get("condition_players", {})
+        lap_player = players.get("2")
+        self.connection.execute("INSERT OR REPLACE INTO condition_frames VALUES (?,?,?,?)",
+            (uid, header.overall_frame_identifier,
+             int(7 in parts and lap_player == header.player_car_index and players.get("7") == lap_player),
+             int(lap_player == header.player_car_index and players.get("6") == lap_player)))
         self.connection.execute("INSERT OR REPLACE INTO sample_origins VALUES (?,?,?,?)",
                                 (uid, header.overall_frame_identifier, frame.get("raw_offset"), frame.get("raw_end_offset")))
         self.connection.execute("DELETE FROM frame_quality_issues WHERE session_uid=? AND overall_frame_identifier=?",
@@ -349,7 +384,7 @@ def _decoded_raw(archive: Path):
 
 
 @contextmanager
-def _analysis_input(archive: Path, use_foundation: bool, foundation_database: Path | None, recover_tail: bool = False):
+def _analysis_input(archive: Path, use_foundation: bool, foundation_database: Path | None, recover_tail: bool = False, control=None):
     if not use_foundation:
         yield _decoded_raw(archive), None
         return
@@ -368,7 +403,7 @@ def _analysis_input(archive: Path, use_foundation: bool, foundation_database: Pa
         if not database.is_file():
             raise ValueError("基础数据尚未准备好，请稍后重试；采集仍继续运行。")
     else:
-        prepared = ensure_foundation(archive, database, recover_tail=recover_tail)
+        prepared = ensure_foundation(archive, database, recover_tail=recover_tail, control=control)
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
         connection.execute("BEGIN")  # A consistent point-in-time view while capture continues.
         version = connection.execute("SELECT value FROM metadata WHERE key='version'").fetchone()
@@ -394,6 +429,7 @@ def build_analysis(
     export_files: bool = False,
     force_rebuild: bool = False,
     recover_tail: bool = False,
+    control=None,
 ) -> dict[str, Any]:
     archive, session_directory = _archive_path(source)
     if not archive.is_file():
@@ -410,6 +446,7 @@ def build_analysis(
 
     packet_counts: Counter[int] = Counter()
     errors: list[dict[str, Any]] = []
+    error_count = 0
     session_info: dict[str, dict[str, Any]] = {}
     session_bounds: dict[str, list[int]] = {}
     histories: dict[str, tuple[int, dict[str, Any]]] = {}
@@ -419,13 +456,11 @@ def build_analysis(
     input_stack = ExitStack()
     connection = None
     try:
-        inputs, foundation_progress = input_stack.enter_context(_analysis_input(archive, use_foundation, foundation_database, recover_tail))
+        inputs, foundation_progress = input_stack.enter_context(_analysis_input(archive, use_foundation, foundation_database, recover_tail, control))
         cache_key = {
             "source_archive": str(archive),
             "cursor": foundation_progress["cursor"] if foundation_progress else None,
-            "engine": ANALYSIS_ENGINE_VERSION, "schema": SCHEMA_VERSION,
-            "events": EVENT_DETECTION_VERSION, "thresholds": EVENT_THRESHOLDS,
-            "distance_step_m": distance_step_m, "include_invalid": include_invalid,
+            **algorithm_contract(distance_step_m, include_invalid),
             "export_files": export_files,
             "tail_error": foundation_progress.get("tail_error") if foundation_progress else None,
         }
@@ -448,6 +483,8 @@ def build_analysis(
         writer = _FrameWriter(connection)
         for archived in inputs:
             total += 1
+            if control:
+                control.report('解析玩家数据', total)
             try:
                 if archived.error:
                     raise ValueError(archived.error)
@@ -534,12 +571,15 @@ def build_analysis(
                     if decoded["car_idx"] == header.player_car_index:
                         histories[uid] = (archived.received_at_ns, decoded)
             except Exception as exc:
+                error_count += 1
                 errors.append(
                     {
                         "record_number": total, "offset": archived.offset,
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
+                if len(errors) > 200:
+                    errors.pop()
             if progress_every and total % progress_every == 0:
                 print(f"Analysed {total:,} raw packets...", flush=True)
 
@@ -584,8 +624,9 @@ def build_analysis(
         resampling = resample_laps(
             connection, distance_step_m=distance_step_m,
             include_invalid=include_invalid,
+            control=control,
         )
-        event_analysis = analyze_driving_events(connection)
+        event_analysis = analyze_driving_events(connection, control=control)
         metadata = {
             "schema_version": SCHEMA_VERSION,
             "source_archive": str(archive),
@@ -619,7 +660,8 @@ def build_analysis(
             "schema_version": SCHEMA_VERSION,
             "total_raw_packets": total,
             "packet_counts": {str(key): packet_counts[key] for key in sorted(packet_counts)},
-            "decode_error_count": len(errors),
+            "decode_error_count": error_count,
+            "error_details_truncated": error_count > len(errors),
             "session_count": len(session_bounds),
             "final_lap_count": sum(
                 len(_lap_rows(uid, received, decoded))
@@ -629,6 +671,7 @@ def build_analysis(
             "active_telemetry_samples": active_samples,
             "superseded_telemetry_samples": superseded_samples,
             "incomplete_frame_count": writer.incomplete,
+            "identity_mismatch_frame_count": writer.identity_mismatches,
             "incomplete_frames_by_missing_packet": {
                 ",".join(str(packet_id) for packet_id in missing): count
                 for missing, count in sorted(writer.incomplete_missing_parts.items())

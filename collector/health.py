@@ -1,7 +1,45 @@
 """Low-cost, hysteretic resource policy. Never drops a Raw datagram."""
 from dataclasses import dataclass
+from functools import lru_cache
 
 MIB = 1024 * 1024
+
+
+@lru_cache(maxsize=1)
+def _windows_memory_reader():
+    import ctypes
+    from ctypes import wintypes
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage", "PrivateUsage")]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    psapi.GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD)
+    psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+    return kernel, psapi, Counters
+
+
+def process_memory_bytes():
+    """Own-process Windows resident/private bytes; no dependency or UI metric.
+
+    Best-effort once per health check. A failed/unsupported query is unknown,
+    not zero. Start/last/peak samples alone do not prove a memory leak.
+    """
+    import os
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        kernel, psapi, Counters = _windows_memory_reader()
+        counters = Counters()
+        counters.cb = ctypes.sizeof(counters)
+        if not psapi.GetProcessMemoryInfo(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+            return None
+        return {"working_set_bytes": counters.WorkingSetSize, "private_bytes": counters.PrivateUsage}
+    except (OSError, AttributeError):
+        return None
 
 
 @dataclass(frozen=True)

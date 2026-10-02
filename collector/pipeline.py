@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from queue import Empty, Full, Queue
 import threading
-from typing import Any
+from typing import Any, Protocol
 
-from collector.packet_capture import PacketCapture
 from collector.udp_receiver import ReceivedDatagram
 
 
@@ -17,10 +16,21 @@ class CaptureOverloadError(RuntimeError):
 _STOP = object()
 
 
+class CaptureSink(Protocol):
+    software_drop_count: int
+
+    @property
+    def has_pending(self) -> bool: ...
+    def process(self, datagram: ReceivedDatagram) -> None: ...
+    def checkpoint(self) -> None: ...
+    def summary(self, status: str) -> dict[str, Any]: ...
+    def close(self, status: str = "complete") -> dict[str, Any]: ...
+
+
 class CapturePipeline:
     def __init__(
         self,
-        capture: PacketCapture,
+        capture: CaptureSink,
         capacity: int = 8192,
         put_timeout_seconds: float = 0.25,
     ) -> None:
@@ -70,7 +80,7 @@ class CapturePipeline:
                 try:
                     item = self._queue.get(timeout=1.0)
                 except Empty:
-                    if self.capture.raw_writer.has_pending:
+                    if self.capture.has_pending:
                         self.capture.checkpoint()
                     continue
                 try:

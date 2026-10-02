@@ -190,6 +190,26 @@ class RawPacketWriter:
             "offset_kind": "logical_v1" if self.archive_version == 2 else "physical",
         }
 
+    def suspend(self) -> None:
+        """Release an idle archive handle without forgetting its logical offsets."""
+        if not self._file.closed:
+            self.flush()
+            self._file.close()
+            stat = self.path.stat()
+            self._suspended_identity = (stat.st_size, stat.st_mtime_ns)
+
+    def resume(self) -> None:
+        """Resume only this writer's unchanged, fully committed archive."""
+        if self._failed:
+            raise RuntimeError("raw writer previously failed")
+        if not self._file.closed:
+            return
+        stat = self.path.stat()
+        if (stat.st_size, stat.st_mtime_ns) != getattr(self, "_suspended_identity", None):
+            raise RuntimeError("suspended raw archive changed; refusing to append")
+        self._file = self.path.open("r+b", buffering=256 * 1024)
+        self._file.seek(0, os.SEEK_END)
+
     def close(self) -> None:
         if not self._file.closed:
             try:

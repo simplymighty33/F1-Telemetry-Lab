@@ -24,6 +24,7 @@ def _canonical(packet) -> tuple:
 
 def verify_archives(
     source: Path, target: Path, *, allow_truncated_source: bool = False,
+    control=None,
 ) -> dict[str, Any]:
     source_iter = iter_archive(source)
     target_iter = iter_archive(target)
@@ -32,6 +33,8 @@ def verify_archives(
     tail_error = None
     try:
         while True:
+            if control:
+                control.report('逐包校验', count)
             try:
                 left = next(source_iter, None)
             except ArchiveReadError as exc:
@@ -63,6 +66,7 @@ def verify_archives(
 def convert_archive(
     source: Path, target: Path, *, compression: str = "zlib",
     compression_level: int = 1, recover_tail: bool = False,
+    control=None,
 ) -> dict[str, Any]:
     source = source.expanduser().resolve()
     target = target.expanduser().resolve()
@@ -83,6 +87,8 @@ def convert_archive(
         ) as writer:
             try:
                 for packet in iter_archive(source):
+                    if control:
+                        control.report('压缩原始数据', writer.packets_written)
                     writer.write(
                         packet.payload, packet.received_at_ns, packet.monotonic_ns,
                         packet.source_ip, packet.source_port,
@@ -93,12 +99,14 @@ def convert_archive(
                 read_error = str(exc)
                 if not writer.packets_written:
                     raise ValueError("archive contains no recoverable complete records") from exc
-        verification = verify_archives(source, temporary, allow_truncated_source=recover_tail)
+        verification = verify_archives(source, temporary, allow_truncated_source=recover_tail, control=control)
         if (source.stat().st_size, source.stat().st_mtime_ns) != (source_stat.st_size, source_stat.st_mtime_ns):
             raise RuntimeError("source changed during conversion; stop the capture before converting")
         compressed_bytes = temporary.stat().st_size
         # Hard-link publication is atomic and fails if another task created the
         # target. Both paths are on the same volume, unlike the input archive.
+        if control:
+            control.report('发布已校验副本', verification['verified_packet_count'])
         os.link(temporary, target)
         stats = writer.statistics()
         return {

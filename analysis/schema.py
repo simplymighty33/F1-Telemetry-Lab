@@ -5,12 +5,15 @@ from __future__ import annotations
 import sqlite3
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def ensure_quality_schema(connection: sqlite3.Connection) -> None:
     """Additive derived-only migration; does not commit the caller's transaction."""
     statements = (
+        """CREATE TABLE IF NOT EXISTS condition_frames(session_uid TEXT, overall_frame_identifier INTEGER,
+            status_present INTEGER NOT NULL, telemetry_present INTEGER NOT NULL,
+            PRIMARY KEY(session_uid,overall_frame_identifier))""",
         """CREATE TABLE IF NOT EXISTS sample_origins(session_uid TEXT, overall_frame_identifier INTEGER,
             raw_start_offset INTEGER, raw_end_offset INTEGER, PRIMARY KEY(session_uid,overall_frame_identifier))""",
         """CREATE TABLE IF NOT EXISTS frame_quality_issues(session_uid TEXT, overall_frame_identifier INTEGER,

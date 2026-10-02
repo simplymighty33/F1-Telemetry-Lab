@@ -181,7 +181,18 @@ class TelemetryDatabase:
         )
         self.connection.commit()
 
+    def update_session_context(self, session_id: str, track: str | None, session_type: str | None) -> None:
+        self.connection.execute("UPDATE sessions SET track=?,session_type=? WHERE session_id=?",
+                                (track, session_type, session_id))
+        self.connection.commit()
+
     def close(self) -> None:
         self.flush()
         self.connection.close()
+
+    def resume(self) -> None:
+        """Reopen an existing index; never recreate its schema or session row."""
+        self.connection = sqlite3.connect(self.path, check_same_thread=False)
+        self.connection.execute("PRAGMA journal_mode=WAL")
+        self.connection.execute("PRAGMA synchronous=NORMAL")
 

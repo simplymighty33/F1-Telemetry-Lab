@@ -9,9 +9,11 @@ import sqlite3
 import json
 from typing import Any
 from decoder.tyres import LapTyreInfo
+from decoder.display import session_label
 from analysis.quality import finite, inspect_source
 from analysis.resample import _source_rows, _interpolate
 from analysis.regions import TimeRegion, time_regions
+from analysis.practice import _conditions, condition_warnings
 
 
 REQUIRED_TABLES = {
@@ -30,8 +32,7 @@ class SessionChoice:
 
     @property
     def label(self) -> str:
-        details = " · ".join(value for value in (self.game_mode, self.session_type, self.track) if value)
-        return f"{details or '未知会话'} · {self.lap_count} 圈"
+        return f"{session_label(self.track, self.session_type)} · {self.game_mode or '模式未知'} · {self.lap_count} 圈"
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,8 @@ class LapSummary:
     steering_correction_count: int
     steering_variation_per_km: float
     tyre: LapTyreInfo = LapTyreInfo()
+    track: str = ""
+    session_type: str = ""
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,7 @@ class LapComparison:
     unattributed_delta_ms: float = 0.0
     warnings: tuple[str, ...] = ()
     residual_components: tuple[tuple[str, float], ...] = ()
+    conditions: tuple[dict, ...] = ()
 
 
 class AnalysisDatabaseError(ValueError):
@@ -118,6 +122,7 @@ class AnalysisRepository:
             self.has_segments = "driving_segments" in tables
             self.has_source_samples = "telemetry_samples" in tables
             self.has_quality_details = "lap_quality_details" in tables
+            self.has_condition_evidence = "condition_frames" in tables
         missing = REQUIRED_TABLES - tables
         if missing:
             raise AnalysisDatabaseError(
@@ -174,6 +179,7 @@ class AnalysisRepository:
             return self._laps(connection, session_uid)
 
     def _laps(self, connection: sqlite3.Connection, session_uid: str) -> tuple[LapSummary, ...]:
+        context = connection.execute("SELECT track,session_type FROM sessions WHERE session_uid=?", (session_uid,)).fetchone()
         tyres = {}
         if self.has_tyre_metadata:
             for row in connection.execute("SELECT * FROM lap_tyres WHERE session_uid=?", (session_uid,)):
@@ -200,7 +206,9 @@ class AnalysisRepository:
                 """,
                 (session_uid,),
             ).fetchall()
-        return tuple(LapSummary(**dict(row), tyre=tyres.get(row["lap_number"], LapTyreInfo())) for row in rows)
+        return tuple(LapSummary(**dict(row), tyre=tyres.get(row["lap_number"], LapTyreInfo()),
+                                track=context[0] or "" if context else "",
+                                session_type=context[1] or "" if context else "") for row in rows)
 
     def comparison(
         self,
@@ -253,6 +261,8 @@ class AnalysisRepository:
             source_rows = [_source_rows(connection, session_uid, number, length) if self.has_source_samples else []
                            for number in (reference_lap, comparison_lap)]
             sources = [inspect_source(items) for items in source_rows]
+            conditions = tuple(_conditions(connection, session_uid, number, items, length, self.has_condition_evidence)
+                               for number, items in zip((reference_lap, comparison_lap), source_rows))
             steps = connection.execute("SELECT distance_step_m FROM lap_analysis WHERE session_uid=? AND lap_number IN (?,?)",
                                        (session_uid, reference_lap, comparison_lap)).fetchall()
         rows = [dict(row) for row in rows if not length or 0 <= row["distance_m"] <= length]
@@ -303,6 +313,9 @@ class AnalysisRepository:
         observed = sum(region.delta_ms for region in regions)
         official = comparison.lap_time_ms - reference.lap_time_ms
         warnings = []
+        condition_items = [dict(compound=lap.tyre.actual_compound, wear_percent=lap.tyre.wear_percent, conditions=condition)
+                           for lap, condition in zip((reference, comparison), conditions)]
+        warnings.extend(condition_warnings(*condition_items))
         for name, source in zip(("基准圈", "对比圈"), sources):
             if source.status != "ready":
                 warnings.append(f"{name}源采样质量：" + {
@@ -340,9 +353,11 @@ class AnalysisRepository:
             regions=regions, observed_delta_ms=observed, unattributed_delta_ms=official - observed,
             warnings=tuple(warnings),
             residual_components=tuple(components),
+            conditions=conditions,
         )
 
 
 def find_latest_analysis_database(data_directory: Path) -> Path | None:
-    candidates = list(data_directory.glob("session_*/analysis/telemetry_analysis.db"))
+    candidates = [path for path in data_directory.glob("session_*/analysis*/telemetry_analysis.db")
+                  if path.parent.name == 'analysis' or path.parent.name.startswith('analysis_v')]
     return max(candidates, key=lambda path: path.stat().st_mtime_ns) if candidates else None

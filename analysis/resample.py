@@ -134,6 +134,7 @@ def resample_laps(
     include_invalid: bool = False,
     minimum_coverage: float = 0.90,
     lap_keys: set[tuple[str, int]] | None = None,
+    control=None,
 ) -> dict[str, int]:
     if not math.isfinite(distance_step_m) or distance_step_m <= 0:
         raise ValueError("distance step must be a positive finite number")
@@ -159,6 +160,8 @@ def resample_laps(
         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """
     for session_uid, lap_number, lap_valid, track_length in laps:
+        if control:
+            control.report('距离重采样', accepted + rejected, len(laps))
         rows = _source_rows(connection, session_uid, lap_number, track_length)
         minimum = rows[0]["lap_distance_m"] if rows else None
         maximum = rows[-1]["lap_distance_m"] if rows else None

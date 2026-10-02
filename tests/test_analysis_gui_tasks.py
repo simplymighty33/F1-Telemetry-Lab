@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import tkinter as tk
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, ANY
 
 from collector.analysis_gui import AnalysisWindow
 from storage.raw_writer import RawPacketWriter, iter_archive
@@ -42,7 +42,7 @@ class AnalysisGuiTaskTests(unittest.TestCase):
         ) as builder, patch.object(self.window, "load_database") as loader:
             self.window.choose_session()
             self._receive_worker_result()
-            builder.assert_called_once_with(self.session, progress_every=0)
+            builder.assert_called_once_with(self.session, progress_every=0, control=ANY)
             loader.assert_called_once_with(self.database)
         self.assertEqual(self.window.build_button.cget("state"), "normal")
         self.assertEqual(self.window.compress_button.cget("state"), "normal")
@@ -67,7 +67,7 @@ class AnalysisGuiTaskTests(unittest.TestCase):
         ), patch("collector.analysis_gui.convert_archive", return_value=result) as converter:
             self.window.choose_compress()
             self._receive_worker_result()
-            converter.assert_called_once_with(self.raw, target)
+            converter.assert_called_once_with(self.raw, target, control=ANY)
         self.assertEqual(self.window.build_button.cget("state"), "normal")
         self.assertEqual(self.window.compress_button.cget("state"), "normal")
         self.assertIn("压缩副本已保存", self.window.status_var.get())

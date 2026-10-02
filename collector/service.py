@@ -12,16 +12,16 @@ import threading
 import time
 from typing import Any
 
-from collector.packet_capture import PacketCapture
-from collector.foundation_worker import FoundationWorker
-from collector.analysis_worker import AnalysisWorker
+from collector.session_capture import SessionCapture
+from collector.session_workers import SessionDerivedWorker
 from collector.pipeline import CapturePipeline
 from collector.settings import Settings
 from collector.udp_receiver import UdpReceiver
-from collector.health import resource_decision
+from collector.health import resource_decision, process_memory_bytes
 from decoder.header import HeaderDecodeError, decode_header
 from decoder.full_parser import PacketDecodeError, decode_packet
 from decoder.protocol import game_label
+from decoder.stream import validate_packet
 from decoder.session_history import LapHistoryUpdate, PlayerSessionHistoryTracker
 
 
@@ -46,6 +46,11 @@ class CollectorSnapshot:
     analysis_state: str = "disabled"
     analysis_error: str | None = None
     health_warnings: tuple[str, ...] = ()
+    session_uid: int | None = None
+    player_car_index: int | None = None
+    packet_format: int | None = None
+    udp_port: int | None = None
+    display_error: str | None = None
 
 
 class CollectorService:
@@ -82,14 +87,17 @@ class CollectorService:
         self._received_packets = 0
         self._last_packet_at_ns: int | None = None
         self._recent_packet_times: deque[float] = deque(maxlen=8192)
-        self._capture: PacketCapture | None = None
+        self._capture: SessionCapture | None = None
         self._pipeline: CapturePipeline | None = None
-        self._foundation: FoundationWorker | None = None
-        self._analysis: AnalysisWorker | None = None
+        self._foundation: SessionDerivedWorker | None = None
         self._game_mode = "等待 Session 数据"
         self._session_type = "—"
         self._track_name = "—"
         self._game_name = "等待数据"
+        self._game_context = None
+        self._bound_port = None
+        self._display_failures = 0
+        self._display_error = None
 
     def start(self) -> None:
         self._thread.start()
@@ -127,14 +135,22 @@ class CollectorService:
             except OSError:
                 free = None
             foundation = self._foundation.snapshot() if self._foundation else None
-            analysis = self._analysis.snapshot() if self._analysis else None
+            analysis = self._foundation.analysis_snapshot() if self._foundation else None
             queued = self._pipeline.queue_size
-            foundation_lag = max(0, self._capture.packet_count - foundation.packets) if foundation else 0
+            current = self._capture.active_capture(ready_only=True)
+            foundation_lag = max(0, current.packet_count - foundation.packets) if foundation and current else 0
             analysis_lag = max(0, foundation.packets - analysis.packets) if foundation and analysis else 0
             decision = resource_decision(queued, self.settings.queue_capacity, free,
                 paused=self._pressure.is_set(),
                 foundation_lag=foundation_lag, analysis_lag=analysis_lag)
             stats["checks"] += 1
+            memory = process_memory_bytes()
+            stats["memory_checks"] = stats.get("memory_checks", 0) + int(memory is not None)
+            if memory is not None:
+                for name, value in memory.items():
+                    stats.setdefault("memory_start_" + name, value)
+                    stats["memory_last_" + name] = value
+                    stats["memory_peak_" + name] = max(stats.get("memory_peak_" + name, 0), value)
             stats["pressure_checks"] += int(decision.pause_derived)
             stats["queue_peak"] = max(stats["queue_peak"], queued)
             stats["foundation_lag_peak"] = max(stats["foundation_lag_peak"], foundation_lag)
@@ -180,7 +196,8 @@ class CollectorService:
                 last_packet_at_ns=self._last_packet_at_ns,
                 queue_size=pipeline.queue_size if pipeline else 0,
                 queue_capacity=self.settings.queue_capacity,
-                session_directory=capture.session_directory if capture else None,
+                session_directory=(capture.directory_for(self._game_context[0], self._game_context[2])
+                                   if capture and self._game_context else capture.session_directory if capture else None),
                 error=self._error,
                 game_mode=self._game_mode,
                 session_type=self._session_type,
@@ -188,10 +205,24 @@ class CollectorService:
                 game_name=self._game_name,
                 foundation_state=self._foundation.snapshot().state if self._foundation else "disabled",
                 foundation_error=self._foundation.snapshot().error if self._foundation else None,
-                analysis_state=self._analysis.snapshot().state if self._analysis else "disabled",
-                analysis_error=self._analysis.snapshot().error if self._analysis else None,
+                analysis_state=self._foundation.analysis_snapshot().state if self._foundation else "disabled",
+                analysis_error=self._foundation.analysis_snapshot().error if self._foundation else None,
                 health_warnings=self._health_warnings,
+                session_uid=self._game_context[0] if self._game_context else None,
+                player_car_index=self._game_context[1] if self._game_context else None,
+                packet_format=self._game_context[2] if self._game_context else None,
+                udp_port=self._bound_port,
+                display_error=self._display_error,
             )
+
+    def _observe_context(self, header):
+        key = (header.session_uid, header.player_car_index, header.packet_format)
+        with self._lock:
+            if key != self._game_context:
+                self._game_context = key
+                self._track_name, self._session_type = "—", "—"
+                self._game_mode = "等待 Session 数据"
+                self._latest_lap_update = LapHistoryUpdate(header.session_uid, ())
 
     def _set_state(self, state: str, message: str, error: str | None = None) -> None:
         with self._lock:
@@ -221,7 +252,8 @@ class CollectorService:
         summary: dict[str, Any] | None = None
         try:
             receiver.open()
-            capture = PacketCapture(
+            self._bound_port = receiver.bound_port
+            capture = SessionCapture(
                 self.data_directory,
                 receiver.bound_port,
                 database_batch_size=self.settings.database_batch_size,
@@ -241,17 +273,12 @@ class CollectorService:
                 self._pipeline = pipeline
             pipeline.start()
             if self.settings.foundation_enabled:
-                self._foundation = FoundationWorker(
-                    capture.session_directory / "raw_packets.bin",
-                    lambda: capture.raw_writer.persisted_file_bytes,
-                    self.logger,
+                self._foundation = SessionDerivedWorker(
+                    capture, self.logger,
+                    analysis_enabled=self.settings.analysis_enabled,
                     pressure=self._pressure.is_set,
                 )
                 self._foundation.start()
-                if self.settings.analysis_enabled:
-                    self._analysis = AnalysisWorker(capture.session_directory / "raw_packets.bin", self.logger,
-                                                    pressure=self._pressure.is_set)
-                    self._analysis.start()
             self._health_thread = threading.Thread(target=self._monitor_resources, name="collector-health", daemon=False)
             self._health_thread.start()
             self.logger.info("Desktop collector listening on %s:%s", self.host, receiver.bound_port)
@@ -267,6 +294,8 @@ class CollectorService:
                 self._record_packet(datagram.received_at_ns)
                 try:
                     header = decode_header(datagram.payload)
+                    validate_packet(datagram.payload, header)
+                    self._observe_context(header)
                     detected_game = game_label(header)
                     with self._lock:
                         self._game_name = detected_game
@@ -278,12 +307,19 @@ class CollectorService:
                             self._game_mode = session["game_mode_name"]
                             self._session_type = session["session_type_name"]
                             self._track_name = session["track_name"]
-                            capture.track = session["track_name"]
-                            capture.session_type = session["session_type_name"]
                     history_update = tracker.observe(
                         datagram.payload, datagram.received_at_ns, header
                     )
                 except (HeaderDecodeError, PacketDecodeError, ValueError, struct.error):
+                    history_update = None
+                except Exception:
+                    # Display/reducer faults cannot justify stopping Raw reception.
+                    self._display_failures += 1
+                    with self._lock:
+                        self._display_error = "圈速显示曾发生异常；Raw采集仍继续，请停止后重新分析核验。"
+                    if self._display_failures & (self._display_failures - 1) == 0:
+                        self.logger.exception("Display decoding failed (%s); Raw capture continues",
+                                              self._display_failures)
                     history_update = None
                 if history_update is not None:
                     with self._lock:
@@ -323,8 +359,6 @@ class CollectorService:
                 )
             if self._foundation is not None:
                 self._foundation.close()
-            if self._analysis is not None:
-                self._analysis.close()
             if failure is not None:
                 detail = f"{type(failure).__name__}: {failure}"
                 self._set_state("error", "采集发生错误；窗口将保持打开", detail)

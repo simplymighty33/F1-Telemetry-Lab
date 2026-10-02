@@ -27,7 +27,7 @@ class CollectorLayoutTests(unittest.TestCase):
             self._assert_buttons_inside(window)
             item = window.lap_table.get_children()[0]
             values = window.lap_table.item(item, "values")
-            self.assertEqual(values[:3], ("第 5 圈", "软胎 · 磨损 8.0%", "第 2 套 · 第 1 圈"))
+            self.assertEqual(values[:3], ("总第5圈", "软胎（磨损8.0%）", "第 2 套 · 第 1 圈"))
             window.lap_table.xview_moveto(1)
             root.update()
             x, _y, width, _height = window.lap_table.bbox(item, "status")

@@ -10,6 +10,15 @@ from collector.settings import ConfigurationError, load_settings, parse_user_udp
 
 
 class SettingsTests(unittest.TestCase):
+    def test_nonfinite_and_excessive_timing_values_are_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'settings.json'
+            for key in ('receiver_timeout_seconds', 'queue_put_timeout_seconds', 'status_interval_seconds'):
+                for value in (float('nan'), float('inf'), 1e300):
+                    with self.subTest(key=key, value=value):
+                        path.write_text(json.dumps({key: value}), encoding='utf-8')
+                        with self.assertRaises(ConfigurationError):
+                            load_settings(path)
     def test_user_port_validation(self) -> None:
         for text, expected in (("20777", 20777), (" 5000 ", 5000), ("65535", 65535), ("1", 1)):
             self.assertEqual(parse_user_udp_port(text), expected)

@@ -385,7 +385,7 @@ def iter_foundation(connection: sqlite3.Connection, after_offset: int = -1,
         yield FoundationPacket(offset, received, decode_header(raw_header) if len(raw_header) == HEADER_SIZE else None, body, error)
 
 
-def ensure_foundation(source: Path, database: Path | None = None, *, recover_tail: bool = False, verify: bool = False) -> dict:
+def ensure_foundation(source: Path, database: Path | None = None, *, recover_tail: bool = False, verify: bool = False, control=None) -> dict:
     """Convert old Raw once; unchanged closed sources use their compatible cache.
 
     Fast reuse checks path-associated cache, size and high-resolution mtime.
@@ -393,6 +393,8 @@ def ensure_foundation(source: Path, database: Path | None = None, *, recover_tai
     sources always verify the earlier prefix before resuming.
     """
     source = source.resolve()
+    if control:
+        control.report('基础数据校验')
     target = (database or foundation_path(source)).resolve()
     progress = read_progress(target)
     stat = source.stat()
@@ -404,6 +406,8 @@ def ensure_foundation(source: Path, database: Path | None = None, *, recover_tai
         return {**progress, "database": str(target), "reused": True, "tail_error": None}
     with FoundationStore(source, target) as store, ArchiveCursor(source, store.progress["cursor"]) as cursor:
         while batch := cursor.next_batch(stat.st_size, recover_tail=recover_tail):
+            if control:
+                control.report('整理基础数据', cursor.tell(), stat.st_size)
             store.ingest(batch, cursor.checkpoint(), source_mtime_ns=stat.st_mtime_ns)
         if cursor.tail_error is None and cursor.tell() != stat.st_size:
             raise FoundationError("Raw source was not completely consumed")

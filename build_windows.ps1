@@ -13,7 +13,9 @@ try {
     }
     python -m PyInstaller --noconfirm --clean ".\packaging\F1TelemetryCollector.spec"
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller build failed." }
-    Write-Host "Build complete: $ProjectRoot\dist\F1TelemetryLab-1.0.2\F1TelemetryLab.exe"
+    $taskVersion = python -c "from collector import DISPLAY_VERSION; print(DISPLAY_VERSION)"
+    if ($LASTEXITCODE -ne 0) { throw "Version detection failed." }
+    Write-Host "Build complete: $ProjectRoot\dist\F1TelemetryLab-$taskVersion\F1TelemetryLab.exe"
 } finally {
     Pop-Location
 }

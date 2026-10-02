@@ -116,8 +116,9 @@ def decode_session(
     size_counts: Counter[int] = Counter()
     session_info: dict[int, dict[str, Any]] = {}
     player_histories: dict[int, list[dict[str, Any]]] = {}
-    events: list[dict[str, Any]] = []
+    event_count = 0
     errors: list[dict[str, Any]] = []
+    error_count = 0
     total = 0
     first_received_at_ns: int | None = None
     last_received_at_ns: int | None = None
@@ -128,6 +129,12 @@ def decode_session(
         if write_packets
         else None
     )
+    event_fields = ['session_uid', 'received_at', 'session_time', 'frame_identifier',
+                    'overall_frame_identifier', 'event_code', 'event_name', 'event_details']
+    event_temporary = output_directory/'events.csv.tmp'
+    event_stream = event_temporary.open('w', encoding='utf-8-sig', newline='')
+    event_writer = csv.DictWriter(event_stream, fieldnames=event_fields)
+    event_writer.writeheader()
     try:
         for archived in iter_archive(archive):
             total += 1
@@ -136,6 +143,7 @@ def decode_session(
             try:
                 decoded = decode_packet(archived.payload)
             except Exception as exc:
+                error_count += 1
                 errors.append(
                     {
                         "record_number": total,
@@ -144,6 +152,8 @@ def decode_session(
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
+                if len(errors) > 200:
+                    errors.pop()
                 continue
 
             header = decoded["header"]
@@ -178,7 +188,8 @@ def decode_session(
                     "track_length": decoded["track_length"],
                 }
             elif packet_id == 3:
-                events.append(
+                event_count += 1
+                event_writer.writerow(
                     {
                         "session_uid": str(session_uid),
                         "received_at": _iso(archived.received_at_ns),
@@ -187,7 +198,7 @@ def decode_session(
                         "overall_frame_identifier": header["overall_frame_identifier"],
                         "event_code": decoded["event_code"],
                         "event_name": decoded["event_name"],
-                        "event_details": decoded["event_details"],
+                        "event_details": json.dumps(decoded["event_details"], ensure_ascii=False, separators=(',', ':')),
                     }
                 )
             elif packet_id == 11 and decoded["car_idx"] == header["player_car_index"]:
@@ -199,7 +210,16 @@ def decode_session(
 
             if progress_every and total % progress_every == 0:
                 print(f"Decoded {total:,} packets...", flush=True)
+    except BaseException:
+        event_stream.close()
+        if packet_stream is not None:
+            packet_stream.close()
+        for unfinished in (event_temporary, packet_temporary):
+            if unfinished.exists():
+                unfinished.unlink()
+        raise
     finally:
+        event_stream.close()
         if packet_stream is not None:
             packet_stream.close()
 
@@ -222,21 +242,7 @@ def decode_session(
         writer.writeheader()
         writer.writerows(all_laps)
 
-    event_fields = [
-        "session_uid", "received_at", "session_time", "frame_identifier",
-        "overall_frame_identifier", "event_code", "event_name", "event_details",
-    ]
-    with (output_directory / "events.csv").open(
-        "w", encoding="utf-8-sig", newline=""
-    ) as stream:
-        writer = csv.DictWriter(stream, fieldnames=event_fields)
-        writer.writeheader()
-        for event in events:
-            event = dict(event)
-            event["event_details"] = json.dumps(
-                event["event_details"], ensure_ascii=False, separators=(",", ":")
-            )
-            writer.writerow(event)
+    os.replace(event_temporary, output_directory/'events.csv')
 
     sessions = [session_info[uid] for uid in sorted(session_info)]
     _write_json(output_directory / "sessions.json", sessions)
@@ -246,15 +252,16 @@ def decode_session(
         "output_directory": str(output_directory),
         "status": "complete" if not errors else "completed_with_errors",
         "total_records": total,
-        "decoded_records": total - len(errors),
-        "decode_error_count": len(errors),
-        "all_crc_checks_passed": not errors,
+        "decoded_records": total - error_count,
+        "decode_error_count": error_count,
+        "error_details_truncated": error_count > len(errors),
+        "all_crc_checks_passed": True,  # iter_archive raises on CRC failure before a summary is published.
         "first_received_at": _iso(first_received_at_ns) if first_received_at_ns else None,
         "last_received_at": _iso(last_received_at_ns) if last_received_at_ns else None,
         "packet_counts": {str(key): packet_counts[key] for key in sorted(packet_counts)},
         "payload_size_counts": {str(key): size_counts[key] for key in sorted(size_counts)},
         "session_count": len(session_info),
-        "event_count": len(events),
+        "event_count": event_count,
         "final_player_lap_count": len(all_laps),
         "decoded_packet_archive": packet_target.name if write_packets and not errors else None,
     }

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -75,8 +76,10 @@ def _positive_float(config: dict[str, Any], key: str) -> float:
         value = float(config[key])
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigurationError(f"{key} must be a number") from exc
-    if value <= 0:
-        raise ConfigurationError(f"{key} must be greater than zero")
+    maximum = {"receiver_timeout_seconds": 5.0, "queue_put_timeout_seconds": 5.0,
+               "status_interval_seconds": 3600.0}[key]
+    if not math.isfinite(value) or not 0 < value <= maximum:
+        raise ConfigurationError(f"{key} must be finite and between zero (exclusive) and {maximum}")
     return value
 
 

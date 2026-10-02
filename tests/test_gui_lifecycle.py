@@ -188,7 +188,7 @@ class GuiLifecycleTests(unittest.TestCase):
         started = threading.Event()
         self.releases.append(release)
 
-        def converter(*_args):
+        def converter(*_args, **_kwargs):
             started.set()
             release.wait(5)
             return {"saved_percent": 10.0, "verified_packet_count": 3}
@@ -215,8 +215,7 @@ class GuiLifecycleTests(unittest.TestCase):
         self.services.append(service)
         window = CollectorWindow(self.root, service, self.logger, self.directory / "data", self.config)
         self.wait_until(lambda: service.snapshot().state == "listening")
-        first_session = service.snapshot().session_directory
-        first_port = json.loads((first_session / "metadata.json").read_text(encoding="utf-8"))["udp_port"]
+        first_port = service.snapshot().udp_port
 
         def send(port, count):
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
@@ -227,18 +226,19 @@ class GuiLifecycleTests(unittest.TestCase):
                     sender.sendto(payload, ("127.0.0.1", port))
 
         send(first_port, 100)
-        self.wait_until(lambda: service.snapshot().received_packets == 100)
+        self.wait_until(lambda: service.snapshot().persisted_packets == 100)
+        first_session = service.snapshot().session_directory
         window.port_var.set(str(new_port))
         with patch("collector.gui.messagebox.askyesno", return_value=True):
             window.apply_port()
         self.wait_until(lambda: window.service is not service and window.service.snapshot().state == "listening")
         self.services.append(window.service)
-        second_session = window.service.snapshot().session_directory
-        self.assertNotEqual(first_session, second_session)
         self.assertEqual(load_settings(self.config).udp_port, new_port)
         self.assertEqual(service.snapshot().persisted_packets, 100)
         send(new_port, 250)
-        self.wait_until(lambda: window.service.snapshot().received_packets == 250)
+        self.wait_until(lambda: window.service.snapshot().persisted_packets == 250)
+        second_session = window.service.snapshot().session_directory
+        self.assertNotEqual(first_session, second_session)
         self.root.tk.call(self.root.protocol("WM_DELETE_WINDOW"))
         # Keep the interpreter for assertions while exercising the real shutdown polling.
         with patch.object(self.root, "destroy") as destroy, patch("collector.gui.close_logging"):

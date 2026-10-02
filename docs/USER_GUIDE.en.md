@@ -1,120 +1,45 @@
-# F1 Telemetry Lab 1.0.2 — User Guide
+# F1 Telemetry Lab 1.0.3 — User guide
 
-Public release 1.0.2 includes all features developed under the local 1.1 and 1.2 milestone names. It is not a feature rollback; no separate 1.1/1.2 installation is needed.
+## Start
 
-The current Windows interface is Chinese. The English descriptions below include the relevant Chinese button labels.
+Extract the entire package and run `F1TelemetryLab.exe`; keep `_internal/` beside it. Python is not required. Use a writable folder with enough space. `config/`, `data/`, and `logs/` are created automatically.
 
-## 1. Installation
+Enable game UDP telemetry, normally 60 Hz, and match the application port (default 20777). Same PC: destination `127.0.0.1`; separate PC: collector's LAN IPv4, with the trusted private-network firewall configured. Avoid competing listeners. F1 23/24/25 and the implemented F1 25 2026 Season Pack formats are detected automatically; the application does not change game settings.
 
-Use a complete packaged Windows distribution, not GitHub's source ZIP. Extract the whole `F1TelemetryLab-1.0.2` folder and keep `F1TelemetryLab.exe` beside `_internal`. Python is not required for the packaged application.
+**保存并重新监听** saves a port from 1–65535 and safely restarts listening. Reception briefly pauses; synchronize the game's port between runs.
 
-Choose a writable folder with enough free disk space. On first startup, the application creates `config/`, `data/`, and `logs/` beside the EXE. Download the complete Windows ZIP from [Release v1.0.2](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.2). Both English and Chinese guides are included beside the EXE.
+## Record and locate data
 
-## 2. Game settings
+Check receiving status and an advancing recent-data time. The latest-first table shows official lap/sectors, validity, total/session lap, compound, wear and tyre-set lap. Wear is used percentage, not remaining life; unavailable evidence stays unknown. Browsing old rows preserves scroll. Flashback supersedes prior results. Sprint/Race remains explicitly uncertain when evidence is insufficient.
 
-In the game's telemetry settings:
+New archives are routed by `(packetFormat, sessionUID)`, not time, lap count, pits, tyres or Flashback. Example:
 
-| Setting | Recommended value |
-| --- | --- |
-| UDP Telemetry | On |
-| UDP Send Rate | 60 Hz |
-| UDP Port | `20777`, or any port matching the application |
-| UDP Format | The game's native format |
-| UDP IP Address, same PC | `127.0.0.1` |
-| UDP IP Address, separate PCs | Collector PC's LAN IPv4 address |
+`session_20261002_153000_F1-23_澳大利亚_练习赛2_UID-000000000000004D`
 
-F1 23/24/25 and the F1 25 2026 Season Pack formats are selected from packet Headers automatically. This does **not** enable UDP in the game or change its destination settings. For LAN use, permit the application on the appropriate trusted private network and check the firewall if no data arrives.
+Names use first receipt time and first confirmed context; later changes remain in metadata. Active analysis paths do not repeatedly move. Late packets return to the matching archive; unidentifiable input is saved separately. New runs/collisions do not overwrite old data.
 
-Avoid running two collectors that compete for the same UDP port.
+Each archive normally has authoritative `raw_packets.bin`, packet index `telemetry.db`, `metadata.json`, `foundation/` and `analysis_v1.0.3/`. Lossless compression preserves all received bytes, envelopes and full car arrays. Derived caches add disk usage, not replace Raw. Old folders are not migrated; Raw v1/v2 remain readable.
 
-## 3. Recording
+## Analyze
 
-1. Launch `F1TelemetryLab.exe` and check the UDP port.
-2. Enter a driving session in the game.
-3. Confirm the detected game/session/track and that the recent-data timestamp keeps updating.
-4. Complete laps. The lap table shows newest results first, including sectors, validity, compound, wear, and tyre-set lap number when the required data is available.
-5. Stop with **安全停止并关闭** (safe stop and close), or click X. Wait for the saving/background-task dialog to finish before shutting down the PC.
+Open **单圈分析** from the collector to connect automatically, without manual Raw import. Completed results appear after background commits. New game sessions wait for their own results; manual historical selection remains available.
 
-To change ports, enter a value from 1 to 65535 and use **保存并重新监听** (save and restart listening). This safely ends the current recording and begins a new one. Reception pauses briefly; change the game's port too, preferably between sessions.
+- **打开分析数据库**: read-only browsing of existing `telemetry_analysis.db`, including old results.
+- **从 Session 生成分析**: select the whole directory containing Raw. First use prepares reusable foundation data; later use continues progress. During recording it reads only committed snapshots.
+- Incompatible/moved legacy caches offer independent reconstruction after capture stops, into `analysis_v1.0.3_rebuild_...` with fresh foundation. Existing results remain intact. First-time processing of large Raw still takes time.
 
-Tyre-set lap numbering is separate from session lap numbering. Wear describes tyre wear, not remaining tyre life. Missing or stale tyre information may be unavailable. Flashbacks withdraw affected old results; final lap history follows the valid timeline.
+Choose session, driving segment, reference and comparison laps. Labels include track/stage, session lap, compound/wear and official time. Distance traces, events and time intervals are observations, not causal coaching. Positive delta means comparison-lap loss; negative means gain. Official lap delta, observed interval delta and unassigned remainder stay separate. Ordinary packet progress preserves focus; heavy comparisons run in the background.
 
-## 4. Files and backups
+Expand/double-click quality rows for coverage, gaps, channel/identity problems and source evidence. Frame gaps are not measured UDP-loss percentages. Practice review includes driving-segment summaries, comparison-condition evidence, repeatability and read-only audits. Diagnostic summaries omit identity, IP and private paths by default.
 
-Each recording has a directory such as:
+## Jobs and closing
 
-```text
-data/session_YYYYMMDD_HHMMSS/
-  raw_packets.bin
-  telemetry.db
-  metadata.json
-  foundation/raw_packets.foundation-v2.db
-  analysis_v0.10.0/telemetry_analysis.db
-```
+Offline jobs show stage and processed count; a total appears only when known. **取消后台任务** requests safe cancellation at record/batch/lap boundaries. Independent Raw reception continues. Committed analysis progress remains resumable; unfinished transactions roll back. An ongoing I/O/fsync or lap computation may take time to finish.
 
-- `raw_packets.bin`: losslessly stored packet bytes and receipt information; the primary archive.
-- `telemetry.db`: recording packet index, **not** a lap-analysis database.
-- `metadata.json`: recording and storage summary.
-- `foundation/`: reusable decoded foundation cache.
-- `analysis_v0.10.0/telemetry_analysis.db`: incremental lap-analysis results. The historical directory name is intentionally retained for compatibility.
+**压缩旧 Raw** creates a new verified copy of a stopped archive. Select an unused target name. Bytes, envelopes, CRC and logical offsets are compared before publication. The source is preserved; cancellation publishes no unverified copy. Keep space for source, temporary copy and caches.
 
-Foundation and analysis files are derived from Raw and may not exist immediately. Back up or move the **entire session folder after safe shutdown**, rather than copying a live database in isolation. Keep Raw even when derived results already exist.
+Use **安全停止并关闭** or X and wait for the saving dialog. Raw is drained first; derived consumers commit/close and offline jobs receive cancellation. Display/analysis faults stay visible without silently stopping capture. Storage failures and queue overflow are explicit failures. Resource pressure can pause derived work; critically low disk space safely stops capture.
 
-## 5. Lap analysis
+After all capture/processing stops, copy the entire Session, including metadata and any remaining SQLite `-wal`/`-shm` files. Do not copy only an active main database or delete active locks/caches. New caches use archive identity/relative paths, not cryptographic tamper protection. If content may have changed while retaining size/timestamps, choose independent reconstruction or full developer source verification.
 
-Open **圈速分析** (lap analysis).
-
-### From a recording: 从 Session 生成分析
-
-Choose the **session directory containing `raw_packets.bin`**, not the Raw file itself. The program creates or updates analysis and opens the result. The first conversion of an older archive may take longer; subsequent updates reuse committed progress.
-
-With background analysis enabled, completed laps are processed while recording. Live results are committed snapshots and may briefly lag reception; they are not immediate packet-by-packet coaching.
-
-### From existing results: 打开分析数据库
-
-Choose `analysis_v0.10.0/telemetry_analysis.db` to view already-generated results. Older compatible analysis databases can also be opened. Do **not** choose the session-root `telemetry.db`.
-
-Select a session, driving segment, reference lap, and comparison lap. The charts show cumulative time difference, speed, throttle, and brake against track distance. Available metrics include sectors, maximum speed, input usage, braking, gear changes, and steering corrections.
-
-Driving segments describe garage/on-track boundaries; they are not necessarily identical to tyre stints. Sessions without comparable laps can show quality/status information but not complete comparison curves. Expand the lap-status table for details. Maximize the window for detailed charts, especially on small high-DPI screens.
-
-### Time-gain/loss regions and quality details
-
-The time-region tab splits reliable common coverage into gain, loss, and small-change regions. Select a region to zoom the charts and compare entry/minimum/exit speed, braking, throttle recovery, and gear over the same boundaries. These are observed differences, not automatic explanations of why a lap was faster.
-
-The official lap-time difference is shown separately from the difference supported by reliable regions. The residual is split arithmetically into start, unsupported interior, and finish contributions; it is not forced to zero or presented as a proven driving loss. Endpoints are limited to actual supported data, with no extrapolation.
-
-Double-click a lap in the quality/status table for coverage, sample cadence, missing-frame evidence, recorded game context, and Raw logical offsets. Logical offsets are not physical byte positions in a compressed file. Missing Lap Data can only be associated approximately by neighboring frame ranges. Evidence lists are capped; their counts may exceed the number of displayed entries.
-
-Known incomplete frames and suspicious cadence gaps are not bridged by interpolation, lines, or driving-event extraction. Large gaps or invalid essential fields can exclude a lap; finer gaps leave metrics limited to observable portions. A warning does not measure exact UDP packet loss, and a pause in wall-clock reception does not alone prove network loss. Tyre-compound differences and wear differences of at least five percentage points prompt a comparison warning; fuel, weather, traffic, assists, and setup can also matter.
-
-### Resource protection
-
-Raw capture has priority. At 60% write-queue usage, derived background work pauses between batches and resumes below 25%. Below 1 GiB free disk space, it pauses and warns; below 128 MiB, reception stops gracefully and the window stays open. An analysis lag of at least 10,000 packets warns. Already-running transactions are not forcibly interrupted.
-
-These are best-effort safeguards, not guarantees against a disk suddenly filling, hardware faults, forced termination, or packets lost before reception. Queue overflow is reported explicitly rather than hidden. The recording metadata includes sampled resource-pressure counters, free-space minimum, and backlog peaks; these are not packet-loss counts or exact pause durations. Retain the recording and use session analysis later to catch up.
-
-## 6. Compressing older archives
-
-New recordings are already losslessly compressed by default. **压缩旧 Raw** (compress old Raw) is intended mainly for older uncompressed recordings.
-
-Stop recording first. Select the old Raw and a **new** output filename. The tool checks packet bytes and receipt information against the original. Keep the original; do not overwrite it or replace it beside an old index that depends on different offsets.
-
-## 7. Troubleshooting
-
-- **No UDP data:** check telemetry enabled, matching port, destination IP, firewall, and another application occupying the port.
-- **Data arrives but no laps:** finish a full lap and check that Session History packets are being received.
-- **No comparison curves:** inspect lap status. Invalid, partial, or insufficiently covered laps may not qualify.
-- **Database won't open:** use `telemetry_analysis.db`, not `telemetry.db`.
-- **Old Raw conversion is slow:** let the first foundation conversion finish; reopening can reuse it.
-- **Missing application files:** restore the entire packaged folder, including `_internal`.
-- **Background analysis paused:** Raw capture can continue independently. Safely close and retain the whole recording for diagnosis/rebuild.
-- **Forced termination or power failure:** an incomplete tail may be recoverable only as a verified prefix. Checksum corruption is not silently ignored. Normal X/safe-stop closing is safer but cannot guarantee survival of unwritten data during abrupt termination.
-
-When reporting issues, redact personal paths, player identities, source IPs, and any sensitive log content. Do not upload a complete private recording by default.
-
-## 8. Upgrading
-
-Keep older application folders and recordings. Extract the complete new distribution separately. With both versions closed, you may copy the old `config/settings.json` if you want the same settings. Select older session folders in place; do not copy large recordings unnecessarily. Do not run two versions on the same port.
-
-Opening an older analysis database stays read-only. Continuing its incremental analysis adds derived quality tables and updates completed-lap metrics from stored samples without replaying all historical Raw. It cannot recreate evidence that an older version never stored. For full historical provenance, retain the old database and generate a separate full Raw rebuild using a separate output directory (available through the analysis command-line output option). Raw and foundation formats are unchanged; the derived analysis schema is now version 4.
+Confirmed truncated tails can yield a marked verified-prefix result; CRC corruption is not skipped. Raw cannot restore network packets never received. Forced termination/power loss can lose queued or uncommitted tails. Automated/synthetic tests do not prove real-game endurance. Maps, reliable Sprint identification and automatic coaching remain future work. Current release notes/test checklist ship beside the EXE; historical guides remain in source `docs/history/`.

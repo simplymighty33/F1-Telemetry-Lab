@@ -230,9 +230,11 @@ def _insert_events(
     )
 
 
-def _session_metrics(connection: sqlite3.Connection) -> None:
+def _session_metrics(connection: sqlite3.Connection, only_uids: set[str] | None = None) -> None:
     sessions = connection.execute("SELECT session_uid FROM sessions ORDER BY session_uid").fetchall()
     for (session_uid,) in sessions:
+        if only_uids is not None and session_uid not in only_uids:
+            continue
         laps = connection.execute(
             """
             SELECT lap_number, lap_time_ms, sector1_ms, sector2_ms, sector3_ms,
@@ -263,17 +265,22 @@ def _session_metrics(connection: sqlite3.Connection) -> None:
         )
 
 
-def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[str, int]] | None = None) -> dict[str, int]:
+def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[str, int]] | None = None,
+                           summary_uids: set[str] | None = None, control=None) -> dict[str, int]:
     """Populate event and metric tables for every successfully resampled lap."""
-    lap_keys = connection.execute(
-        """
+    affected = None if only_laps is None else {uid for uid, _ in only_laps} | (summary_uids or set())
+    if affected == set():
+        return {}
+    query = """
         SELECT r.session_uid, r.lap_number, l.lap_time_ms, l.lap_valid
         FROM resampled_lap_samples AS r
         JOIN laps AS l ON l.session_uid = r.session_uid AND l.lap_number = r.lap_number
-        GROUP BY r.session_uid, r.lap_number
-        ORDER BY r.session_uid, r.lap_number
         """
-    ).fetchall()
+    args = sorted(affected) if affected is not None else []
+    if affected is not None:
+        query += f" WHERE r.session_uid IN ({','.join('?' for _ in args)})"
+    query += ' GROUP BY r.session_uid, r.lap_number ORDER BY r.session_uid, r.lap_number'
+    lap_keys = connection.execute(query, args).fetchall()
     best_times: dict[str, int] = {}
     for session_uid, _, lap_time_ms, lap_valid in lap_keys:
         if lap_valid and (session_uid not in best_times or lap_time_ms < best_times[session_uid]):
@@ -290,6 +297,8 @@ def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[
     select = f"SELECT {', '.join(SAMPLE_COLUMNS)} FROM resampled_lap_samples "
     select += "WHERE session_uid = ? AND lap_number = ? ORDER BY distance_m"
     for session_uid, lap_number, lap_time_ms, _ in lap_keys:
+        if control:
+            control.check()
         if only_laps is not None and (session_uid, lap_number) not in only_laps:
             continue
         rows = [
@@ -372,11 +381,16 @@ def analyze_driving_events(connection: sqlite3.Connection, only_laps: set[tuple[
         counts["gear_shift_event_count"] += len(shifts)
         counts["lap_metric_count"] += 1
 
-    connection.execute("DELETE FROM session_metrics")
-    _session_metrics(connection)
+    if affected is None:
+        connection.execute("DELETE FROM session_metrics")
+    else:
+        for uid in affected:
+            connection.execute("DELETE FROM session_metrics WHERE session_uid=?", (uid,))
+    _session_metrics(connection, affected)
     # A newly completed best lap also changes older laps' deltas, not their events.
     for uid, best_time in best_times.items():
-        connection.execute("UPDATE lap_metrics SET delta_to_best_ms=lap_time_ms-? WHERE session_uid=?", (best_time, uid))
+        if affected is None or uid in affected:
+            connection.execute("UPDATE lap_metrics SET delta_to_best_ms=lap_time_ms-? WHERE session_uid=? AND (delta_to_best_ms IS NULL OR delta_to_best_ms!=lap_time_ms-?)", (best_time, uid, best_time))
     counts["session_metric_count"] = len(
         connection.execute("SELECT session_uid FROM session_metrics").fetchall()
     )

@@ -77,4 +77,5 @@ class AnalysisWorker:
 
     def close(self):
         self._stop.set()
-        self._thread.join()
+        if self._thread.ident is not None:
+            self._thread.join()
