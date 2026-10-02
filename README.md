@@ -1,13 +1,26 @@
 # F1 Telemetry Lab
 
+## [⬇ 下载 Windows 版 / Download for Windows](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.3/F1TelemetryLab-1.0.3-Windows-x64.zip)
+
+**1.0.3 · Windows x64 · 约 10.6 MiB · 无需安装 Python / No Python installation required**
+
+[最新版本说明 / Release notes](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/latest) · [历史版本 / All releases](https://github.com/simplymighty33/F1-Telemetry-Lab/releases) · [完整中文更新说明](docs/CHANGELOG.zh-CN.md)
+
+[中文使用说明](docs/F1TelemetryCollector-使用说明.txt) · [English user guide](docs/USER_GUIDE.en.md)
+
+完整解压下载包，运行 `F1TelemetryLab.exe`，并保留同目录的 `_internal/` 文件夹。界面目前为中文。  
+Extract the complete ZIP and run `F1TelemetryLab.exe`; keep `_internal/` beside it. The interface is currently Chinese.
+
+> **请下载上方的 Windows 程序包。** 绿色 **Code → Download ZIP** 和 Release 中的 **Source code** 是源码，不是可直接运行的 Windows 程序。  
+> **Use the Windows download above.** GitHub's **Code → Download ZIP** and **Source code** archives are not packaged Windows applications.
+
+---
+
 A Windows telemetry collector and lap analysis tool for **EA SPORTS F1 23, F1 24, and F1 25**.
 
 Built by a hobbyist developer for players who want to review their driving after a few practice laps or after a session. The current application focuses on reliable recording and foundational lap analysis—not an overlay, automated race engineer, or AI driving coach.
 
 **Application version:** 1.0.3
-
-**[完整中文更新说明：1.0 → 1.0.3](docs/CHANGELOG.zh-CN.md)** · [中文使用说明](docs/F1TelemetryCollector-使用说明.txt)
-
 
 **Interface language:** Chinese. This repository provides English documentation; the application interface has not yet been translated.
 
