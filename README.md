@@ -6,6 +6,9 @@ Built by a hobbyist developer for players who want to review their driving after
 
 **Application version:** 1.0.3
 
+**[完整中文更新说明：1.0 → 1.0.3](docs/CHANGELOG.zh-CN.md)** · [中文使用说明](docs/F1TelemetryCollector-使用说明.txt)
+
+
 **Interface language:** Chinese. This repository provides English documentation; the application interface has not yet been translated.
 
 Version 1.0.3 consolidates the local a/b/c milestones, practice-review improvements, Session-based archives, and the completed reliability/performance review. Those suffixes were not public GitHub releases. Previous releases remain available.
