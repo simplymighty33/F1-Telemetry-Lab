@@ -329,7 +329,7 @@ class FoundationTests(unittest.TestCase):
         write_packets(self.raw, [session_packet()])
         result = build_analysis(self.raw, progress_every=0)
         self.assertEqual(database.read_bytes(), b"old user analysis")
-        self.assertIn("analysis_v0.10.0_reference", result["analysis_database"])
+        self.assertIn("analysis_v2.0_reference", result["analysis_database"])
 
 
 if __name__ == "__main__":

@@ -125,11 +125,11 @@ class ContextGuiTests(unittest.TestCase):
         lap = repository.laps("7")[0]
         label = lap_label(replace(lap, track="Melbourne", session_type="Practice 2",
                                  tyre=LapTyreInfo(visual_compound=16, wear_percent=12)))
-        self.assertEqual(label, "澳大利亚 · 练习赛2 · 总第1圈｜软胎（磨损12.0%）｜0:10.000")
+        self.assertEqual(label, "澳大利亚 · 练习赛2 · 第1圈｜软胎（磨损12.0%）｜0:10.000")
         self.assertNotEqual(label, lap_label(replace(lap, lap_number=2)))
         window = AnalysisWindow(self.root, self.directory, self.db)
         self.assertIn("计时赛", window.heading_label.cget("text"))
-        self.assertIn("总第1圈", tuple(window._lap_labels)[0])
+        self.assertIn("第1圈", tuple(window._lap_labels)[0])
         self.assertEqual(before, hashlib.sha256(self.db.read_bytes()).digest())
 
     def test_main_heading_and_rows_clear_on_session_or_player_change(self):
@@ -141,7 +141,7 @@ class ContextGuiTests(unittest.TestCase):
                         tyre=LapTyreInfo(visual_compound=16, wear_percent=12))
         window._render_laps((lap,))
         self.assertIn("澳大利亚 · 练习赛1", window.lap_heading_var.get())
-        self.assertEqual(window.lap_table.item(window.lap_table.get_children()[0], "values")[0], "总第33圈")
+        self.assertEqual(window.lap_table.item(window.lap_table.get_children()[0], "values")[0], "第33圈")
         window._render_snapshot(replace(state, session_uid=8, session_type="Qualifying 1"))
         self.assertEqual(window.lap_table.get_children(), ())
         self.assertIn("排位赛Q1", window.lap_heading_var.get())

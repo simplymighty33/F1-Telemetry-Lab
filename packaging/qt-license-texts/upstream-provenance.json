@@ -1,0 +1,47 @@
+[
+  {
+    "file": "LGPL-3.0-only.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/LGPL-3.0-only.txt",
+    "sha256": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+  },
+  {
+    "file": "GPL-3.0-only.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GPL-3.0-only.txt",
+    "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+  },
+  {
+    "file": "GPL-2.0-only.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/GPL-2.0-only.txt",
+    "sha256": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+  },
+  {
+    "file": "LGPL-2.1-or-later.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/LGPL-2.1-or-later.txt",
+    "sha256": "1ccf09bf2f598308df4bed9cd8e9657dc5cd0973d2800318f2e241486e2edf3f"
+  },
+  {
+    "file": "Qt-GPL-exception-1.0.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/Qt-GPL-exception-1.0.txt",
+    "sha256": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2"
+  },
+  {
+    "file": "Apache-2.0.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/Apache-2.0.txt",
+    "sha256": "e3ba223bb1423f0aad8c3dfce0fe3148db48926d41e6fbc3afbbf5ff9e1c89cb"
+  },
+  {
+    "file": "BSD-2-Clause.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/BSD-2-Clause.txt",
+    "sha256": "8fda146749ca071ac9cdce2e24d25444676ea48d1f9dccc2b7c15c054b717db8"
+  },
+  {
+    "file": "BSD-3-Clause.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/BSD-3-Clause.txt",
+    "sha256": "9f0490f18656c6f2435bd14f603ef0c96434d1825615363dce43abb42ed1dcce"
+  },
+  {
+    "file": "MIT.txt",
+    "url": "https://raw.githubusercontent.com/qt/qtbase/v6.11.2/LICENSES/MIT.txt",
+    "sha256": "d040359701c01996a017d5c515678929cd1b0625e64cb86db44025fbb6cdf1fc"
+  }
+]

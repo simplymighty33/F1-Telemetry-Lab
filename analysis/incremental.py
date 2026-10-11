@@ -28,11 +28,12 @@ from decoder.stream import DECODER_VERSION
 from storage.lease import FileLease, LeaseBusyError, lease_active
 
 INCREMENTAL_VERSION = 1
+ANALYSIS_DIRECTORY = 'analysis_v2.0'
 DERIVED = ("lap_analysis", "resampled_lap_samples", "braking_events", "throttle_events", "gear_shift_events", "lap_metrics", "lap_quality_details")
 
 
 def analysis_path(source: Path) -> Path:
-    return _archive_path(source)[1] / "analysis_v1.0.3" / "telemetry_analysis.db"
+    return _archive_path(source)[1] / ANALYSIS_DIRECTORY / "telemetry_analysis.db"
 
 
 def read_summary(database: Path) -> dict:
@@ -404,9 +405,9 @@ def rebuild_analysis(source: Path, **options) -> dict:
     archive, folder = _archive_path(source)
     if lease_active(folder/'capture.lock'):
         raise ValueError('请先停止采集，再另建分析；已有结果不会被覆盖。')
-    output = folder/f'analysis_v1.0.3_rebuild_{uuid4().hex[:12]}'
+    output = folder/f'{ANALYSIS_DIRECTORY}_rebuild_{uuid4().hex[:12]}'
     output.mkdir(exist_ok=False)
     # A fresh foundation makes same-size but unrelated inputs unambiguously
     # separate, including inputs whose timestamps were deliberately preserved.
     return update_analysis(source, output=output,
-                           foundation_database=output/'raw.foundation-v2.db', **options)
+                           foundation_database=output/f'raw.foundation-v{DECODER_VERSION}.db', **options)

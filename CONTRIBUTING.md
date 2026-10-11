@@ -12,9 +12,9 @@ Use Python 3.10+ and run from the repository root:
 python -m unittest discover -q
 ```
 
-Some GUI tests require Windows and a working desktop/Tk environment. A different environment may skip checks rather than provide equivalent Windows acceptance.
+Some GUI tests require Windows and a working desktop/Qt or legacy Tk environment. A different environment may skip checks rather than provide equivalent Windows acceptance. Core CLI supports Python 3.10+; the locked Qt environment is tested with Windows x64 Python 3.13.15.
 
-Start the GUI with `python -m collector.gui_main`. `build_windows.ps1` installs the optional PyInstaller build dependency and creates the full-folder Windows distribution.
+Install `packaging/requirements-qt-lock.txt`, then start the default Qt GUI with `python -m collector.qt_ui`. Use `python packaging/build_qt.py --output build-qt`, followed by `python packaging/package_qt.py --source build-qt/dist/RaceTraceLab --output release` to build/package the full Windows distribution. The legacy Tk entry point remains available as an explicit fallback in source. See the [2.0 guide](docs/USER_GUIDE_2.0.en.md) and [Qt decision](docs/adr/0005-racetrace2.md).
 
 ## Project boundaries
 
@@ -25,7 +25,7 @@ Start the GUI with `python -m collector.gui_main`. `build_windows.ps1` installs 
 - Use bounded queues/caches and expose errors rather than silently accepting missing work.
 - Do not promise that a test proves zero UDP loss or protection from sudden termination.
 
-The source modules, tests, and historical design documents are included, but private recordings and machine-specific test outputs are not. Historical documents describe their own version; use the English 1.0 guide for current user-facing instructions.
+The source modules, tests, and historical design documents are included, but private recordings, local agent configuration and machine-specific test outputs are not. Historical documents describe their own version; use the English 2.0 guide for current user-facing instructions. No new third-party fonts are installed or distributed.
 
 ## Privacy
 

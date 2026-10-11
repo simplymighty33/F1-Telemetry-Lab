@@ -321,6 +321,7 @@ class AnalysisRepository:
                 warnings.append(f"{name}源采样质量：" + {
                     "insufficient_samples": "无法核验（源采样不足）", "sample_gap": "存在大间隙",
                     "missing_channels": "关键字段缺失或异常", "nonmonotonic_time": "圈内时间不连续",
+                    "unverified_attempt": "圈段与官方计时未匹配",
                 }.get(source.status, source.status))
             if any(issue["kind"] == "cadence_gap" for issue in source.issues):
                 warnings.append(f"{name}存在相对采样节奏异常的间隔；不是已确认的UDP丢包")

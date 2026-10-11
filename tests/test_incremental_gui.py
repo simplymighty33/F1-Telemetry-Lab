@@ -91,7 +91,11 @@ class IncrementalGuiTests(unittest.TestCase):
         self.root.geometry("960x650+30000+30000")
         self.root.deiconify()
         self.root.update()
+        self.window.tools_button.invoke()
+        self.window.quality_toggle.invoke()
+        self.root.update()
         for widget in (self.window.build_button, self.window.segment_combo, self.window.compare_combo, self.window.quality_tree):
+            self.assertTrue(widget.winfo_ismapped())
             x = widget.winfo_rootx() - self.root.winfo_rootx()
             y = widget.winfo_rooty() - self.root.winfo_rooty()
             self.assertGreaterEqual(x, 0)

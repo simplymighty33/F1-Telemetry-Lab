@@ -33,7 +33,7 @@ from storage.raw_writer import iter_archive
 
 FRAME_PACKET_IDS = {0, 2, 6, 7, 10, 13}
 REQUIRED_FRAME_PARTS = {0, 2, 6}
-ANALYSIS_ENGINE_VERSION = 9
+ANALYSIS_ENGINE_VERSION = 10
 
 
 def algorithm_contract(distance_step_m: float, include_invalid: bool = False) -> dict:
@@ -435,7 +435,7 @@ def build_analysis(
     if not archive.is_file():
         raise FileNotFoundError(f"raw archive not found: {archive}")
     # Never replace the user's pre-0.8 analysis database or exports.
-    output_directory = (output or session_directory / "analysis_v0.10.0_reference").expanduser().resolve()
+    output_directory = (output or session_directory / "analysis_v2.0_reference").expanduser().resolve()
     output_directory.mkdir(parents=True, exist_ok=True)
     database = output_directory / "telemetry_analysis.db"
     if database.is_file():

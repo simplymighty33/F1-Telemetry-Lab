@@ -1,16 +1,20 @@
 # F1 Telemetry Lab 1.0.3 — User guide
 
+> Historical guide for the 1.0.3 Tk interface. For RaceTrace Lab 2.0, use the [current Qt user guide](USER_GUIDE_2.0.en.md).
+
 ## Start
 
 Extract the entire package and run `F1TelemetryLab.exe`; keep `_internal/` beside it. Python is not required. Use a writable folder with enough space. `config/`, `data/`, and `logs/` are created automatically.
 
 Enable game UDP telemetry, normally 60 Hz, and match the application port (default 20777). Same PC: destination `127.0.0.1`; separate PC: collector's LAN IPv4, with the trusted private-network firewall configured. Avoid competing listeners. F1 23/24/25 and the implemented F1 25 2026 Season Pack formats are detected automatically; the application does not change game settings.
 
-**保存并重新监听** saves a port from 1–65535 and safely restarts listening. Reception briefly pauses; synchronize the game's port between runs.
+Open **连接设置** (Connection settings), then **保存并重新监听** to save a port from 1–65535 and safely restart listening. Reception briefly pauses; synchronize the game's port between runs.
 
 ## Record and locate data
 
 Check receiving status and an advancing recent-data time. The latest-first table shows official lap/sectors, validity, total/session lap, compound, wear and tyre-set lap. Wear is used percentage, not remaining life; unavailable evidence stays unknown. Browsing old rows preserves scroll. Flashback supersedes prior results. Sprint/Race remains explicitly uncertain when evidence is insufficient.
+
+The current port is shown in the header. **录制详情** expands the recent-data time and full recording path. Important errors remain visible even with details collapsed.
 
 New archives are routed by `(packetFormat, sessionUID)`, not time, lap count, pits, tyres or Flashback. Example:
 
@@ -22,7 +26,7 @@ Each archive normally has authoritative `raw_packets.bin`, packet index `telemet
 
 ## Analyze
 
-Open **单圈分析** from the collector to connect automatically, without manual Raw import. Completed results appear after background commits. New game sessions wait for their own results; manual historical selection remains available.
+Open **查看单圈分析** from the collector to connect automatically, without manual Raw import. Completed results appear after background commits. New game sessions wait for their own results; manual historical selection remains available. **数据工具** expands the advanced operations below and the full database path.
 
 - **打开分析数据库**: read-only browsing of existing `telemetry_analysis.db`, including old results.
 - **从 Session 生成分析**: select the whole directory containing Raw. First use prepares reusable foundation data; later use continues progress. During recording it reads only committed snapshots.
@@ -32,9 +36,15 @@ Choose session, driving segment, reference and comparison laps. Labels include t
 
 Expand/double-click quality rows for coverage, gaps, channel/identity problems and source evidence. Frame gaps are not measured UDP-loss percentages. Practice review includes driving-segment summaries, comparison-condition evidence, repeatability and read-only audits. Diagnostic summaries omit identity, IP and private paths by default.
 
+**指标 / 区间** toggles the detail sidebar, automatically collapsed on constrained/high-DPI layouts. Speed/throttle use solid reference and long-dashed comparison traces; brake uses short-dashed reference and dash-dot comparison traces. Hover, or focus the chart with Tab and use Left/Right, to inspect delta, speed and inputs. Ctrl+0 restores the whole lap.
+
+Throttle and brake now occupy separate vertically aligned plots, each containing only the reference and comparison traces. All four plots share distance alignment. Hover displays the nearest sample's distance and channel values beside the pointer (inputs to 0.1%, speed to 0.1 km/h). Labels identify reference/comparison explicitly. Unreliable samples show a warning rather than operation values; leaving the plot or changing laps/ranges clears the popup. On short/high-DPI windows, use the chart's vertical scrollbar or mouse wheel when it appears; plots are not squeezed into unreadable heights.
+
+**刷新复盘** refreshes the original review's committed snapshot in the background, without Raw replay. Selection and tab are retained; switching the analysis source does not redirect an older review. A failed refresh keeps its previous snapshot. Condition explanations are expandable. **长测审计** is a separate data-tool action; readable checks appear before raw diagnostic JSON.
+
 ## Jobs and closing
 
-Offline jobs show stage and processed count; a total appears only when known. **取消后台任务** requests safe cancellation at record/batch/lap boundaries. Independent Raw reception continues. Committed analysis progress remains resumable; unfinished transactions roll back. An ongoing I/O/fsync or lap computation may take time to finish.
+Offline jobs show stage and processed count; a total appears only when known. **取消任务** appears while a job is active and requests safe cancellation at record/batch/lap boundaries. Independent Raw reception continues. Committed analysis progress remains resumable; unfinished transactions roll back. An ongoing I/O/fsync or lap computation may take time to finish.
 
 **压缩旧 Raw** creates a new verified copy of a stopped archive. Select an unused target name. Bytes, envelopes, CRC and logical offsets are compared before publication. The source is preserved; cancellation publishes no unverified copy. Keep space for source, temporary copy and caches.
 

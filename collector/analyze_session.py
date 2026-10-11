@@ -17,7 +17,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("session", type=Path, help="Session directory or raw_packets.bin")
     parser.add_argument(
-        "--output", type=Path, help="Output directory (default: SESSION/analysis_v0.10.0; full/export uses legacy engine)"
+        "--output", type=Path, help="Output directory (default: SESSION/analysis_v2.0; full/export: analysis_v2.0_reference)"
     )
     parser.add_argument(
         "--distance-step", type=float, default=5.0,

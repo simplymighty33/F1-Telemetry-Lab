@@ -12,7 +12,7 @@ import json
 
 
 SOURCE_COLUMNS = (
-    "frame_identifier", "session_time", "received_at_ns", "pit_status", "driver_status",
+    "frame_identifier", "session_time", "received_at_ns", "pit_status", "driver_status", "current_lap_invalid", "player_car_index",
     "overall_frame_identifier", "lap_distance_m", "current_lap_time_ms",
     "speed_kph", "throttle", "brake", "steer", "gear", "engine_rpm", "drs",
     "g_lateral", "g_longitudinal", "world_x", "world_y", "world_z",
@@ -72,12 +72,34 @@ def _source_rows(
     """
     timeline: list[dict[str, Any]] = []
     candidates: list[list[dict[str, Any]]] = []
+    session = connection.execute(
+        "SELECT session_type_id,game_mode_id,session_type FROM sessions WHERE session_uid=?", (session_uid,)
+    ).fetchone()
+    time_trial = bool(session and (session[0] == 18 or session[1] == 5 or session[2] == 'Time Trial'))
+    official = connection.execute(
+        "SELECT lap_time_ms,lap_valid FROM laps WHERE session_uid=? AND lap_number=?", (session_uid, lap_number)
+    ).fetchone()
     previous_distance: float | None = None
     for values in connection.execute(query, (session_uid, lap_number)):
         row = dict(zip(SOURCE_COLUMNS, values))
         distance = float(row["lap_distance_m"])
         if not math.isfinite(distance):
             continue
+        if time_trial:
+            # Garage teleports can report a finish distance with a zero clock.
+            # Split before that sample, never interpolate it into a flying lap.
+            reset_clock = bool(timeline and finite(row['current_lap_time_ms'])
+                and finite(timeline[-1]['current_lap_time_ms'])
+                and timeline[-1]['current_lap_time_ms'] - row['current_lap_time_ms'] > SMALL_CLOCK_JITTER_MS
+                and (timeline[-1]['lap_distance_m'] - distance > 20
+                     or (track_length_m and distance <= track_length_m * .10)))
+            if row['driver_status'] == 0 or reset_clock:
+                if timeline:
+                    candidates.append(timeline)
+                timeline = []
+                previous_distance = None
+            if row['driver_status'] == 0:
+                continue
         if previous_distance is not None and previous_distance - distance > 20.0:
             crossed_finish = bool(
                 track_length_m
@@ -102,13 +124,32 @@ def _source_rows(
         distances = [float(item["lap_distance_m"]) for item in candidate]
         return max(distances) - min(distances), len(candidate)
 
-    timeline = max(candidates, key=coverage)
+    verified_attempt = True
+    if time_trial and official:
+        # History is authoritative for the final completed lap. A wider aborted
+        # attempt must not win; an incomplete retry must not replace completion.
+        def matches(candidate):
+            last = candidate[-1]
+            return (bool(track_length_m) and coverage(candidate)[0] >= track_length_m * .90
+                    and last['lap_distance_m'] >= track_length_m - 25
+                    and finite(last['current_lap_time_ms'])
+                    and 0 <= official[0] - last['current_lap_time_ms'] <= 250
+                    and (not official[1] or not last['current_lap_invalid']))
+        completed = [candidate for candidate in candidates if matches(candidate)]
+        verified_attempt = bool(completed)
+        timeline = completed[-1] if completed else candidates[-1]
+    else:
+        timeline = max(candidates, key=coverage)
 
     deduplicated: dict[float, dict[str, Any]] = {}
     for row in timeline:
         distance = float(row["lap_distance_m"])
         deduplicated[round(distance, 3)] = row
     ordered = sorted(deduplicated.values(), key=lambda row: row["lap_distance_m"])
+    if ordered and not verified_attempt:
+        ordered[0]['_attempt_unverified'] = True
+    if ordered and time_trial and verified_attempt:
+        ordered[0]['_attempt_selected'] = True
     # Small local clock jitter exists in real Lap Data around corrections.
     # Normalize only the derived in-memory view; Raw and telemetry_samples
     # remain untouched. A genuine reset/large rollback must still be rejected.
@@ -186,12 +227,19 @@ def resample_laps(
             official = connection.execute("SELECT lap_time_ms FROM laps WHERE session_uid=? AND lap_number=?",
                                           (session_uid, lap_number)).fetchone()[0]
             frames = [row["overall_frame_identifier"] for row in rows]
+            selected_attempt = bool(rows and rows[0].get('_attempt_selected'))
+            first_frame, last_frame = min(frames, default=-1), max(frames, default=-1)
             origins = connection.execute("""SELECT MIN(o.raw_start_offset),MAX(o.raw_end_offset)
                 FROM sample_origins o JOIN telemetry_samples t USING(session_uid,overall_frame_identifier)
-                WHERE t.session_uid=? AND t.lap_number=? AND t.superseded=0""", (session_uid, lap_number)).fetchone()
+                WHERE t.session_uid=? AND t.lap_number=? AND t.superseded=0
+                AND (?=0 OR t.overall_frame_identifier BETWEEN ? AND ?)""",
+                (session_uid, lap_number, selected_attempt, first_frame, last_frame)).fetchone()
             missing_query = """FROM frame_quality_issues WHERE session_uid=? AND superseded=0
                 AND (lap_number=? OR (lap_number IS NULL AND overall_frame_identifier BETWEEN ? AND ?))"""
             missing_args = (session_uid, lap_number, min(frames, default=-1), max(frames, default=-1))
+            if selected_attempt:
+                missing_query += " AND overall_frame_identifier BETWEEN ? AND ?"
+                missing_args += (first_frame, last_frame)
             missing_count = connection.execute("SELECT COUNT(*) " + missing_query, missing_args).fetchone()[0]
             missing = [dict(zip(("frame", "distance_m", "raw_start_offset", "raw_end_offset", "missing_parts"), r))
                        for r in connection.execute("""SELECT overall_frame_identifier,distance_m,raw_start_offset,

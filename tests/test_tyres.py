@@ -201,7 +201,7 @@ class TyreTests(unittest.TestCase):
                 records.append(asdict(lap.tyre))
                 self.assertEqual(lap.tyre.wear_percent, 9)
                 self.assertIn("软胎（磨损9.0%）｜0:10.000", lap_label(lap))
-                self.assertIn("总第1圈", lap_label(lap))
+                self.assertIn("第1圈", lap_label(lap))
             self.assertEqual(records[0], records[1])
             self.assertEqual(records[0], asdict(expected))
             # Old derived databases remain read-only and usable without tyre columns.
@@ -211,7 +211,7 @@ class TyreTests(unittest.TestCase):
                 connection.commit()
             old = AnalysisRepository(database)
             self.assertFalse(old.has_tyre_metadata)
-            self.assertIn("总第1圈", lap_label(old.laps("77")[0]))
+            self.assertIn("第1圈", lap_label(old.laps("77")[0]))
 
 
 if __name__ == "__main__":

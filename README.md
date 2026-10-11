@@ -1,122 +1,75 @@
-# F1 Telemetry Lab
+# RaceTrace Lab 2.0
 
-## [⬇ 下载 Windows 版 / Download for Windows](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.3/F1TelemetryLab-1.0.3-Windows-x64.zip)
+## [⬇ 下载 Windows 版 / Download for Windows](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v2.0.0/racetrace2.0.zip)
 
-**1.0.3 · Windows x64 · 约 10.6 MiB · 无需安装 Python / No Python installation required**
+**2.0 · Windows x64 · 53.6 MiB · 无需安装 Python / No Python installation required**
 
-[最新版本说明 / Release notes](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/latest) · [历史版本 / All releases](https://github.com/simplymighty33/F1-Telemetry-Lab/releases) · [完整中文更新说明](docs/CHANGELOG.zh-CN.md)
+[Release notes / 版本说明](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v2.0.0) · [历史版本 / All releases](https://github.com/simplymighty33/F1-Telemetry-Lab/releases) · [中文使用说明](docs/qt-command-center-guide.md) · [English user guide](https://github.com/simplymighty33/F1-Telemetry-Lab/blob/main/docs/USER_GUIDE_2.0.en.md)
 
-[中文使用说明](docs/F1TelemetryCollector-使用说明.txt) · [English user guide](docs/USER_GUIDE.en.md)
+完整解压后运行 `racetrace2.0/RaceTraceLab.exe`，保留 `_internal/` 和许可文件。界面目前为中文。请解压到新目录，不要覆盖旧安装。
 
-完整解压下载包，运行 `F1TelemetryLab.exe`，并保留同目录的 `_internal/` 文件夹。界面目前为中文。  
-Extract the complete ZIP and run `F1TelemetryLab.exe`; keep `_internal/` beside it. The interface is currently Chinese.
+> Use the Windows download above. GitHub's **Code → Download ZIP** and automatic **Source code** archives are source, not runnable Windows applications. The application interface is currently Chinese.
 
-> **请下载上方的 Windows 程序包。** 绿色 **Code → Download ZIP** 和 Release 中的 **Source code** 是源码，不是可直接运行的 Windows 程序。  
-> **Use the Windows download above.** GitHub's **Code → Download ZIP** and **Source code** archives are not packaged Windows applications.
+Raw-first Windows telemetry capture and lap analysis for F1 23/24/25, with automatic protocol detection. The implemented F1 25 2026 Season Pack format is also supported. This independent enthusiast project is not an EA/Codemasters product.
 
----
+Extract the entire `racetrace2.0.zip` into a new writable directory and launch `racetrace2.0/RaceTraceLab.exe`. Keep `_internal/` and licenses beside the EXE; Python is not required. Do not overwrite an older installation.
 
-A Windows telemetry collector and lap analysis tool for **EA SPORTS F1 23, F1 24, and F1 25**.
+- [中文使用说明](docs/qt-command-center-guide.md).
+- [2.0 changes and migration](docs/RELEASE_2.0.md) / [Third-party notices](docs/qt-third-party-notices.md).
 
-Built by a hobbyist developer for players who want to review their driving after a few practice laps or after a session. The current application focuses on reliable recording and foundational lap analysis—not an overlay, automated race engineer, or AI driving coach.
+## Capabilities
 
-**Application version:** 1.0.3
+- Lossless compressed Raw, complete packet/header inspection and offline Replay; unsupported bytes remain captured.
+- Session archives routed by protocol and UID, named by start time, game, track, first confirmed stage and UID. Late packets return to their archive.
+- Latest-first lap history with sectors, validity, compound/wear and tyre-set lap counts; Flashback supersedes old results.
+- Independent resumable foundation/incremental analysis, automatically connected during recording.
+- Distance-aligned comparison, driving events, time-gain/loss intervals, quality details and unassigned-delta reporting.
+- Driving-segment practice review, comparison-condition evidence, repeated observations and privacy-conscious audits.
+- Editable UDP port, safe closing, resource-pressure warnings, cancellable offline processing and verified compression copies.
 
-**Interface language:** Chinese. This repository provides English documentation; the application interface has not yet been translated.
+## What's new in 2.0
 
-Version 1.0.3 consolidates the local a/b/c milestones, practice-review improvements, Session-based archives, and the completed reliability/performance review. Those suffixes were not public GitHub releases. Previous releases remain available.
+- RaceTrace Lab branding and a redesigned, high-DPI-aware Qt interface: live recording, lap comparison and practice review.
+- Separate distance-aligned throttle/brake plots, shared cursor inspection, clearer lap/sector/tyre-wear context and responsive scrolling.
+- Correct F1 25 updated Motion and Car Telemetry layouts, including 2026-format packets emitted while driving pre-2026-regulation cars.
+- Match completed time-trial attempts to official history after returning to the garage or restarting a lap; abandoned attempts no longer replace the matching completed lap.
+- Independent revised caches, visible decoder failures and shorter verified package paths. Original Raw and older analysis results are preserved.
 
-## Features
+Validation: **255 regression tests passed**; a saved **230,335-packet F1 25 recording** replayed successfully and all three completed laps became analyzable. Synthetic packaged-EXE checks covered UDP reception, Raw/Header replay and safe closing. These checks are not a new in-game endurance test or a zero-loss guarantee. New-EXE endurance, clean-Windows and physical mixed-DPI validation remain pending.
 
-- **Automatic protocol detection:** F1 23, F1 24, F1 25, and F1 25's 2026 Season Pack formats. Customize the UDP port in the application.
-- **Lap history:** lap and sector times, compound, end-of-lap tyre wear, and independent tyre-set lap numbering. Newest laps appear first.
-- **Lap comparison:** distance-aligned speed, throttle, brake, and cumulative time difference, with braking and gear-shift events and basic driving metrics.
-- **Time-gain/loss regions:** linked chart zoom and common-boundary driving comparisons, with unsupported timing residuals shown separately rather than forced into a driving explanation.
-- **Quality evidence:** gap/cadence and essential-field checks, per-lap quality details, Raw logical offsets, and pause/session/Flashback context. Unreliable gaps are not bridged by analysis curves or events.
-- **Capture protection:** Raw-first resource priorities, background pause/resume under queue pressure, disk-space warnings and graceful stopping, plus explicit backlog/overflow reporting.
-- **Background analysis:** completed laps are processed incrementally. Reuse existing results instead of replaying the entire recording each time, and filter by driving segment.
-- **Practice review:** driving-segment summaries, comparison-condition evidence, repeated observations, and privacy-conscious diagnostic summaries.
-- **Session archives:** route recordings by protocol and game Session UID, with track/stage information in folder names and lap labels; late packets return to their matching archive.
-- **Responsive browsing:** bounded background comparisons, preserved chart focus and lap-list scroll, and safe cancellation/progress for offline jobs.
-- **Flashback awareness:** keep the original packets while withdrawing affected analysis and updating results from the final valid timeline.
-- **Lossless Raw archives:** independently compressed blocks, checksums, and offline Replay. Recorded packet bytes and Headers can be read again without the game running.
-- **Graceful shutdown:** both the close button and the window's X wait for recording and background tasks to close safely.
-- **Standalone Windows build:** no separate Python installation required. Keep the EXE and its `_internal` folder together.
+## Safety and compatibility
 
-## Getting started
+Raw v1/v2 remain readable. Existing recordings/results are not renamed or overwritten. 2.0 uses `foundation/*foundation-v3.db` and `analysis_v2.0/`; old databases remain readable. An old database reporting insufficient samples will not repair itself when opened: use Session build/rebuild with the original Raw. Unknown layouts remain preserved and reported, not guessed. Supported formats: 2023/2024/2025/2026, packet version 1; a pre-2026 car in updated F1 25 can emit 2026-format packets.
 
-**[Download F1 Telemetry Lab 1.0.3 for Windows](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/download/v1.0.3/F1TelemetryLab-1.0.3-Windows-x64.zip)**. See the [1.0.3 release page](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.3) for release information and checksums.
+Stop capture and processing before copying an entire Session, including metadata and any remaining SQLite companion files. Derived caches add disk usage; Raw remains authoritative. Do not remove active locks/caches. There is no zero-loss guarantee for packets never received, overload, forced termination or power loss. Frame gaps are not measured UDP-loss percentages. Sprint/Race remains explicitly uncertain when evidence is insufficient. Maps and automatic coaching are future work.
 
-Download `F1TelemetryLab-1.0.3-Windows-x64.zip` from the release assets. GitHub's **Code → Download ZIP** and automatically generated **Source code** archives are not packaged Windows applications.
+## Develop
 
-ZIP SHA-256:
-
-```text
-6B7973D79914D112468F9992E77A0D19F95B0B0B6471DE0FEDFE361D460ABD40
-```
-
-Once you have the complete Windows distribution:
-
-1. Extract the whole `F1TelemetryLab-1.0.3` folder into a writable location.
-2. Enable UDP Telemetry in the game. Use its native UDP format, a matching port (default `20777`), and preferably a 60 Hz send rate.
-3. For the same PC, send UDP to `127.0.0.1`. For another PC, use the collector PC's LAN IPv4 address.
-4. Run `F1TelemetryLab.exe`, complete a few laps, and open the lap analysis window.
-5. Close using the safe-stop button or X, and wait for the saving dialog to finish.
-
-See the [English user guide](docs/USER_GUIDE.en.md) and [1.0.3 release notes](docs/RELEASE_1.0.3.en.md). Both Chinese and English guides are included in the Windows distribution.
-
-## Reliability and limitations
-
-The 1.0.3 implementation passed **192 regression tests** in both the local release tree and the independent public source copy, including frame identity, cache compatibility, cancellation, UI-state preservation, Session routing, and shutdown fault cases. Packaged EXE checks covered help, offline audit and compression of a **35-packet synthetic recording**; replayed bytes, receipt times, source IPs and CRC values matched. The release ZIP passed CRC and per-file SHA-256 checks. Earlier F1 23 long testing covered a 624,609-packet recording; that historical result is not a new endurance test of 1.0.3.
-
-These checks are evidence for specific tested recordings and fixtures, **not a guarantee of zero UDP loss on every machine**. UDP delivery, storage speed, network configuration, and forced termination can still affect a recording. Real-game long-duration validation has been performed for F1 23; the other protocol formats have fixture-based checks and need further real-game testing.
-
-Other current boundaries:
-
-- Enabling UDP and setting the destination IP/port in the game remain the user's responsibility.
-- First-time processing of an older Raw archive can take longer because its analysis foundation must be built.
-- Only sufficiently complete laps are eligible for comparison. Incomplete or invalid laps may have a status but no comparison curves.
-- Derived databases add storage overhead even though Raw data is compressed.
-- Fine-gap checks cannot measure exact packet loss or recover missing packets. Unsupported timing components are arithmetic quantities, not proven causes; observed driving differences are not automatic coaching.
-- Older analysis databases remain readable. New incremental output uses `analysis_v1.0.3/` with an algorithm compatibility signature. Incompatible/moved caches offer an independent rebuild into a new directory, without overwriting the old result. First reconstruction may require a full Raw read; later work reuses compatible progress.
-- Mixed player/protocol/frame channels are reported as quality issues, not used as valid merged telemetry. Missing evidence is not invented. CRC/source identity are not cryptographic tamper protection.
-- Sprint/Race classification remains explicitly uncertain when available evidence is insufficient; labelled sprint-weekend recordings are still needed.
-- Cancellation is cooperative; it does not forcibly interrupt an ongoing system I/O, flush, or individual lap calculation.
-- Graceful closing cannot protect unwritten buffers against a power failure or forced process termination. A verified archive prefix may be recoverable.
-- This release does not include a packaged track map library, setup recommendations, or automatic driving diagnosis.
-
-## Feedback
-
-Bug reports and suggestions are welcome through [Issues](https://github.com/simplymighty33/F1-Telemetry-Lab/issues). Please include the application version, game/protocol, Windows version, steps to reproduce, and a screenshot if helpful. **Do not publicly upload full recordings, personal configuration, IP addresses, player identities, or unredacted logs.**
-
-## Project status and licensing
-
-The 1.0.3 source code, tests, and Windows packaging configuration are included in this repository. The packaged Windows application is available in [Release v1.0.3](https://github.com/simplymighty33/F1-Telemetry-Lab/releases/tag/v1.0.3). Previous v1.0.0 and v1.0.2 releases remain available.
-
-### Run from source
-
-Python 3.10+ is required. Runtime code uses the standard library; PyInstaller is only a build dependency.
+Core CLI: Python >=3.10 and standard library. GUI/build tested with Windows x64 Python 3.13.15 and the locked Qt environment; no new dependency or third-party font was added in 2.0.
 
 ```powershell
-python -m collector.gui_main
+python -m collector.main --help
+python -m pip install -r packaging/requirements-qt-lock.txt
+python -m collector.qt_ui
+python -m unittest discover -s tests -v
+python -m collector.prepare_session SESSION --verify
+python -m collector.analyze_session SESSION
+python -m collector.analyze_session SESSION --force-rebuild --export
+python packaging/build_qt.py --output build-qt
+python packaging/package_qt.py --source build-qt/dist/RaceTraceLab --output release
 ```
 
-Run the regression suite:
+Contracts: `docs/RAW_ARCHIVE_FORMAT.md`, `docs/FOUNDATION_v0.8.0.md`, `docs/INCREMENTAL_v0.10.0.md`, `docs/adr/`. Current release notes override historical defaults. Pre-1.0.3 combined guides remain in `docs/history/`.
 
-```powershell
-python -m unittest discover -q
-```
+[Project repository](https://github.com/simplymighty33/F1-Telemetry-Lab). No application source-code license has been selected; public visibility is not a grant of unrestricted reuse. Third-party component licenses are supplied separately. This unofficial project is not affiliated with EA SPORTS, Codemasters, Formula 1 or SimHub.
+# Qt desktop interface
 
-Build a Windows distribution on Windows:
+2.0 采用已批准的 PySide6 Widgets + pyqtgraph 界面与修复后的解码/分析核心。
+源码：Python 3.13 环境安装 `.[gui]` 后运行 `python -m collector.qt_ui`；
+`--analysis` / `--analysis-db PATH` 可独立离线使用，不启动 UDP。
+Windows 运行 `RaceTraceLab.exe`，保留整个 onedir 文件夹。名称及应用图标已更新；录制路径、配置和历史数据格式不变。
+构建：`build_windows_qt.ps1 -Python <3.13环境python>`，锁定文件位于 packaging/。
+GUI 命令 `racetrace-lab`、`f1-telemetry-lab`、`f1-telemetry-ui`、`f1-telemetry-qt` 统一启动 Qt（需安装 `[gui]`），明确回退命令为 `f1-telemetry-tk`。CLI 与原模块路径保留。
+详见 [中文使用说明](docs/qt-command-center-guide.md)、[UI 决策](docs/adr/0004-qt-command-center.md)。
+地图测试程序保持独立，地图 / ERS 曲线未接入主程序。保存 Raw 回放不等于新版游戏长测，真实游戏长测、干净 Windows 与混合 DPI 跨屏验收仍需进行。
 
-```powershell
-.\build_windows.ps1
-```
-
-The build produces `dist/F1TelemetryLab-1.0.3/`. Preserve the entire folder when distributing it. The packaging specification retains its historical `F1TelemetryCollector.spec` name for compatibility.
-
-Source modules: `collector/` (application and workers), `storage/` (Raw archives and foundation), `decoder/` (protocols), and `analysis/` (lap reconstruction and comparison). See [CONTRIBUTING.md](CONTRIBUTING.md) for feedback and development guidelines.
-
-No open-source license has been selected. Public visibility should not be interpreted as a license granting unrestricted reuse.
-
-This is an independent, unofficial hobby project, not affiliated with or endorsed by EA SPORTS, Codemasters, Formula 1, or SimHub.

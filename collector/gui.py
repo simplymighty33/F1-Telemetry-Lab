@@ -18,16 +18,9 @@ from collector.service import CollectorService, CollectorSnapshot
 from collector.settings import ConfigurationError, load_settings, parse_user_udp_port, save_udp_port
 from collector.shutdown import ShutdownDialog
 from decoder.display import session_label, track_label, stage_label, tyre_label
-
-
-BACKGROUND = "#10141c"
-PANEL = "#19212d"
-TEXT = "#f4f7fb"
-MUTED = "#9cabc0"
-ACCENT = "#e10600"
-GREEN = "#35c46a"
-AMBER = "#f5b942"
-RED = "#ff5a5f"
+from collector.ui_theme import (
+    BACKGROUND, PANEL, TEXT, MUTED, ACCENT, GREEN, AMBER, RED, configure_theme, button,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -108,35 +101,17 @@ class CollectorWindow:
         self.root.after(150, self._poll)
 
     def _configure_styles(self) -> None:
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure(
-            "Telemetry.Treeview",
-            background=PANEL,
-            fieldbackground=PANEL,
-            foreground=TEXT,
-            rowheight=30,
-            borderwidth=0,
-            font=("Segoe UI", 10),
-        )
-        style.configure(
-            "Telemetry.Treeview.Heading",
-            background="#252f3e",
-            foreground=TEXT,
-            relief="flat",
-            font=("Segoe UI Semibold", 10),
-        )
-        style.map("Telemetry.Treeview", background=[("selected", "#34445a")])
+        configure_theme(self.root)
 
     def _build_layout(self) -> None:
         header = tk.Frame(self.root, bg=BACKGROUND)
-        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(24, 14))
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 8))
         tk.Label(
             header,
-            text=APP_NAME.upper(),
+            text=APP_NAME,
             bg=BACKGROUND,
             fg=TEXT,
-            font=("Segoe UI Semibold", 21),
+            font=("Segoe UI Semibold", 16),
         ).pack(side="left")
         tk.Label(
             header,
@@ -147,9 +122,14 @@ class CollectorWindow:
             pady=4,
             font=("Segoe UI Semibold", 9),
         ).pack(side="left", padx=12)
+        self.port_button = button(header, "连接设置", self.open_connection)
+        self.port_button.pack(side="right")
+        self.port_summary = tk.StringVar(value=f"UDP {self.service.port}")
+        tk.Label(header, textvariable=self.port_summary, bg=BACKGROUND, fg=MUTED,
+                 font=("Segoe UI", 9)).pack(side="right", padx=12)
 
-        status_panel = tk.Frame(self.root, bg=PANEL, padx=18, pady=14)
-        status_panel.grid(row=1, column=0, sticky="ew", padx=28, pady=(0, 12))
+        status_panel = tk.Frame(self.root, bg=PANEL, padx=12, pady=6)
+        status_panel.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
         status_row = tk.Frame(status_panel, bg=PANEL)
         status_row.pack(fill="x")
         self.status_dot = tk.Label(
@@ -160,50 +140,50 @@ class CollectorWindow:
             font=("Segoe UI", 17),
         )
         self.status_dot.pack(side="left")
-        tk.Label(
+        status_label = tk.Label(
             status_row,
             textvariable=self.status_var,
             bg=PANEL,
             fg=TEXT,
-            font=("Segoe UI Semibold", 12),
-        ).pack(side="left", padx=(8, 0))
+            font=("Segoe UI Semibold", 10), justify="left", anchor="w",
+        )
+        status_label.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        status_label.bind("<Configure>", lambda e: status_label.configure(wraplength=max(120, e.width)))
 
-        connection = tk.Frame(status_panel, bg=PANEL)
-        connection.pack(fill="x", pady=(8, 0))
+        self.connection_window = tk.Toplevel(self.root)
+        self.connection_window.withdraw()
+        self.connection_window.title("UDP 连接设置")
+        self.connection_window.configure(bg=BACKGROUND)
+        self.connection_window.transient(self.root)
+        self.connection_window.protocol("WM_DELETE_WINDOW", self.connection_window.withdraw)
+        self.connection_window.bind("<Escape>", lambda _e: self.connection_window.withdraw())
+        connection = tk.Frame(self.connection_window, bg=PANEL, padx=16, pady=16)
+        connection.pack(fill="both", expand=True)
         tk.Label(connection, text="UDP 端口", bg=PANEL, fg=TEXT, font=("Segoe UI", 10)).pack(side="left")
         self.port_entry = ttk.Entry(connection, textvariable=self.port_var, width=8)
         self.port_entry.pack(side="left", padx=10)
-        self.port_button = tk.Button(
-            connection, text="保存并重新监听", command=self.apply_port,
-            bg="#252f3e", fg=TEXT, activebackground="#34445a", activeforeground=TEXT,
-            relief="flat", padx=10, pady=5, cursor="hand2",
-        )
-        self.port_button.pack(side="left")
+        self.port_apply_button = button(connection, "保存并重新监听", self.apply_port, accent=True)
+        self.port_apply_button.pack(side="left")
         tk.Label(connection, text="须与游戏内 UDP 端口一致", bg=PANEL, fg=MUTED,
                  font=("Segoe UI", 9)).pack(side="left", padx=12)
         if self.config_path is None:
-            self.port_button.configure(state="disabled")
+            self.port_apply_button.configure(state="disabled")
 
-        session_info = tk.Frame(self.root, bg=PANEL, padx=16, pady=11)
-        session_info.grid(row=2, column=0, sticky="ew", padx=28, pady=(0, 12))
-        for variable in (self.game_mode_var, self.session_type_var, self.track_var):
-            tk.Label(
-                session_info,
-                textvariable=variable,
-                bg=PANEL,
-                fg=TEXT,
-                font=("Segoe UI Semibold", 10),
-            ).pack(side="left", expand=True, fill="x", padx=8)
+        self.context_var = tk.StringVar(value="游戏：等待数据　模式：—")
+        context_label = tk.Label(self.root, textvariable=self.context_var, bg=BACKGROUND,
+                                 fg=MUTED, anchor="w", justify="left", font=("Segoe UI", 9))
+        context_label.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
+        context_label.bind("<Configure>", lambda e: context_label.configure(wraplength=max(160, e.width)))
 
         content = tk.Frame(self.root, bg=BACKGROUND)
         self.content = content
-        content.grid(row=3, column=0, sticky="nsew", padx=28)
+        content.grid(row=3, column=0, sticky="nsew", padx=16)
         self.lap_heading = tk.Label(
             content,
             textvariable=self.lap_heading_var,
             bg=BACKGROUND,
             fg=TEXT,
-            font=("Segoe UI Semibold", 13),
+            font=("Segoe UI Semibold", 11),
             justify="left", anchor="w",
         )
         self.lap_heading.pack(fill="x", pady=(2, 8))
@@ -217,7 +197,7 @@ class CollectorWindow:
             style="Telemetry.Treeview",
             height=6,
         )
-        self.lap_table.heading("lap", text="总圈数")
+        self.lap_table.heading("lap", text="圈号")
         self.lap_table.heading("tyre", text="轮胎 / 磨损")
         self.lap_table.heading("tyre_lap", text="胎组圈数")
         self.lap_table.heading("time", text="圈速")
@@ -250,9 +230,10 @@ class CollectorWindow:
 
         footer = tk.Frame(self.root, bg=BACKGROUND)
         self.footer = footer
-        footer.grid(row=4, column=0, sticky="ew", padx=28, pady=(12, 18))
+        footer.grid(row=4, column=0, sticky="ew", padx=16, pady=(6, 10))
         details = tk.Frame(footer, bg=BACKGROUND)
-        details.pack(fill="x")
+        self.details = details
+        self.details_open = False
         tk.Label(
             details,
             textvariable=self.last_packet_var,
@@ -270,7 +251,7 @@ class CollectorWindow:
             justify="left",
         ).pack(anchor="w", pady=(3, 0))
         self.error_label = tk.Label(
-            details,
+            footer,
             textvariable=self.error_var,
             bg=BACKGROUND,
             fg=RED,
@@ -279,40 +260,32 @@ class CollectorWindow:
             justify="left",
         )
         self.error_label.pack(anchor="w", pady=(3, 0))
+        self.error_label.bind("<Configure>", lambda e: self.error_label.configure(wraplength=max(160, footer.winfo_width())))
         # Long session paths occupy their own row instead of squeezing buttons.
         actions = tk.Frame(footer, bg=BACKGROUND)
         self.actions = actions
         actions.pack(fill="x", pady=(10, 0))
-        self.close_button = tk.Button(
-            actions,
-            text="安全停止并关闭",
-            command=self.request_close,
-            bg=ACCENT,
-            activebackground="#b90500",
-            fg="white",
-            activeforeground="white",
-            relief="flat",
-            padx=18,
-            pady=10,
-            cursor="hand2",
-            font=("Segoe UI Semibold", 10),
-        )
-        self.close_button.pack(side="right", padx=(18, 0))
-        self.analysis_button = tk.Button(
-            actions,
-            text="圈速分析",
-            command=self.open_analysis,
-            bg="#252f3e",
-            activebackground="#34445a",
-            fg="white",
-            activeforeground="white",
-            relief="flat",
-            padx=18,
-            pady=10,
-            cursor="hand2",
-            font=("Segoe UI Semibold", 10),
-        )
+        self.close_button = button(actions, "安全停止并关闭", self.request_close)
+        self.close_button.pack(side="right", padx=(12, 0))
+        self.analysis_button = button(actions, "查看单圈分析", self.open_analysis, accent=True)
         self.analysis_button.pack(side="right")
+        self.details_button = button(actions, "录制详情", self.toggle_details)
+        self.details_button.pack(side="left")
+
+    def open_connection(self) -> None:
+        if self._closing or self._restarting:
+            return
+        self.connection_window.deiconify()
+        self.connection_window.lift()
+        self.port_entry.focus_set()
+
+    def toggle_details(self) -> None:
+        self.details_open = not self.details_open
+        if self.details_open:
+            self.details.pack(fill="x", before=self.error_label)
+        else:
+            self.details.pack_forget()
+        self.details_button.configure(text="收起详情" if self.details_open else "录制详情")
 
     def _size_initial_window(self) -> None:
         self.root.update_idletasks()
@@ -361,6 +334,9 @@ class CollectorWindow:
             self.game_mode_var,
             f"游戏：{getattr(snapshot, 'game_name', '等待数据')}　模式：{snapshot.game_mode}",
         )
+        _set_if_changed(self.context_var, self.game_mode_var.get())
+        port = getattr(snapshot, "udp_port", self.service.port)
+        _set_if_changed(self.port_summary, f"UDP {port}")
         _set_if_changed(self.session_type_var, f"比赛阶段：{stage_label(snapshot.session_type)}")
         _set_if_changed(self.track_var, f"赛道：{track_label(snapshot.track_name)}")
         _set_if_changed(self.lap_heading_var, session_label(snapshot.track_name, snapshot.session_type) + " · 玩家逐圈记录")
@@ -419,7 +395,7 @@ class CollectorWindow:
                 "best" if lap.lap_time_ms == best_lap_ms else ""
             )
             values = (
-                    f"总第{lap.lap_number}圈",
+                    f"第{lap.lap_number}圈",
                     tyre_label(lap.tyre),
                     f"第 {lap.tyre.stint_number} 套 · 第 {lap.tyre.tyre_lap_number} 圈"
                     if lap.tyre.tyre_lap_number is not None else "—",
@@ -471,6 +447,7 @@ class CollectorWindow:
     def _disable_connection(self) -> None:
         self.port_entry.configure(state="disabled")
         self.port_button.configure(state="disabled")
+        self.port_apply_button.configure(state="disabled")
 
     def apply_port(self) -> None:
         if self._closing or self._restarting or self.config_path is None:
@@ -524,6 +501,8 @@ class CollectorWindow:
         self._restarting = False
         self.port_entry.configure(state="normal")
         self.port_button.configure(state="normal")
+        self.port_apply_button.configure(state="normal" if self.config_path else "disabled")
+        self.port_summary.set(f"UDP {self._pending_port}")
         self.analysis_button.configure(state="normal")
         self.service.start()
         self.logger.info("UDP port changed to %s; previous session safely closed", self._pending_port)

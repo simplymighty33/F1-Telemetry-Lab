@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 from collector import APP_NAME, DISPLAY_VERSION
 from decoder.tyres import LapTyreInfo
 from decoder.display import tyre_label
+from collector.ui_theme import BACKGROUND, PANEL, TEXT, MUTED, GREEN, AMBER, configure_theme, button
 
 
 def seconds(value):
@@ -23,7 +25,7 @@ def _table(parent, columns, rows):
     frame.pack(fill="both", expand=True)
     frame.columnconfigure(0, weight=1)
     frame.rowconfigure(0, weight=1)
-    table = ttk.Treeview(frame, columns=tuple(k for k, _ in columns), show="headings")
+    table = ttk.Treeview(frame, columns=tuple(k for k, _ in columns), show="headings", style="Metrics.Treeview")
     for key, title in columns:
         table.heading(key, text=title)
         table.column(key, width=130, minwidth=90, stretch=False)
@@ -41,7 +43,8 @@ def _table(parent, columns, rows):
 def _text(parent, content):
     frame = ttk.Frame(parent)
     frame.pack(fill="both", expand=True)
-    text = tk.Text(frame, wrap="word", padx=12, pady=12)
+    text = tk.Text(frame, wrap="word", padx=12, pady=12, bg=PANEL, fg=TEXT,
+                   insertbackground=TEXT, relief="flat", font=("Segoe UI", 10))
     scroll = ttk.Scrollbar(frame, command=text.yview)
     text.configure(yscrollcommand=scroll.set)
     scroll.pack(side="right", fill="y")
@@ -53,6 +56,7 @@ def _text(parent, content):
 
 def _window(parent, title):
     window = tk.Toplevel(parent)
+    configure_theme(window)
     window.title(f"{APP_NAME} {DISPLAY_VERSION} · {title}")
     width, height = max(300, parent.winfo_screenwidth() - 80), max(280, parent.winfo_screenheight() - 100)
     window.geometry(f"{min(1160, width)}x{min(740, height)}")
@@ -61,30 +65,71 @@ def _window(parent, title):
 
 
 class PracticeWindow:
-    def __init__(self, parent, report, on_audit, on_focus=None):
+    def __init__(self, parent, report, on_audit, on_focus=None, on_refresh=None):
         self.report = report
+        self._on_focus = on_focus
+        self._on_refresh = on_refresh
+        self.notes_open = False
         self.root = _window(parent, "练习复盘")
         toolbar = ttk.Frame(self.root, padding=8)
         toolbar.pack(fill="x")
-        ttk.Button(toolbar, text="选择已停止的Session进行长测审计", command=on_audit).pack(side="left")
-        ttk.Label(toolbar, text="已提交快照；新圈完成后关闭并重新打开即可刷新").pack(side="left", padx=8)
+        self.refresh_button = button(toolbar, "刷新复盘", self.request_refresh, accent=True)
+        self.refresh_button.pack(side="right", padx=(8, 0))
+        if on_refresh is None:
+            self.refresh_button.configure(state="disabled")
+        self.snapshot_var = tk.StringVar()
+        snapshot = ttk.Label(toolbar, textvariable=self.snapshot_var, foreground=MUTED, justify="left")
+        snapshot.pack(side="left", fill="x", expand=True)
+        snapshot.bind("<Configure>", lambda e: snapshot.configure(wraplength=max(120, e.width)))
         tabs = ttk.Notebook(self.root)
         tabs.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self.tabs = tabs
+        self.set_report(report)
+
+    def request_refresh(self):
+        if self._on_refresh is not None:
+            self._on_refresh(self)
+
+    def set_refreshing(self, busy, message=None):
+        self.refresh_button.configure(state="disabled" if busy or self._on_refresh is None else "normal",
+                                      text="正在刷新…" if busy else "刷新复盘")
+        if message:
+            self.snapshot_var.set(message)
+
+    def set_report(self, report):
+        selected_tab = self.tabs.index(self.tabs.select()) if self.tabs.tabs() else 0
+        views = {}
+        for name in ("lap_table", "condition_table", "repeat_table"):
+            table = getattr(self, name, None)
+            if table is not None:
+                views[name] = (table.yview()[0], table.xview()[0],
+                               [table.item(i, "values")[0] for i in table.selection()])
+        for identity in self.tabs.tabs():
+            self.tabs.nametowidget(identity).destroy()
+        self.report = report
+        tabs = self.tabs
+        on_focus = self._on_focus
         overview, conditions, repetition, help_page = (ttk.Frame(tabs) for _ in range(4))
         for frame, title in ((overview, "练习段汇总"), (conditions, "比较条件"), (repetition, "多圈重复观察"), (help_page, "长测验收说明")):
             tabs.add(frame, text=title)
         stats = report["statistics"]
-        text = (f"{report['session']} · {report['scope']}\n"
-                f"有效 {stats['count']} / 已列 {len(report['rows'])} 圈；最快 {seconds(stats['best_ms'])}；"
-                f"中位 {seconds(stats['median_ms'])}；极差 {seconds(stats['spread_ms'])}；标准差 {seconds(stats['stddev_ms'])}\n"
-                f"超出最近120圈范围未列：{report['omitted_laps']}。波动不是驾驶评分；条件变化可能影响结果。")
+        text = f"{report['session']} · {report['scope']}"
         label = ttk.Label(overview, text=text, padding=8, justify="left")
         label.pack(fill="x")
         label.bind("<Configure>", lambda e: label.configure(wraplength=max(200, e.width - 20)))
-        self.lap_table = _table(overview, (("lap", "总圈数"), ("time", "圈速"), ("s1", "赛段1"), ("s2", "赛段2"), ("s3", "赛段3"),
+        summary = tk.Frame(overview, bg=BACKGROUND)
+        summary.pack(fill="x", padx=8, pady=(0, 8))
+        for column, (title, value) in enumerate((("有效 / 已列圈", f"{stats['count']} / {len(report['rows'])}"),
+                ("最快圈", seconds(stats['best_ms'])), ("圈速中位", seconds(stats['median_ms'])),
+                ("圈速极差", seconds(stats['spread_ms'])))):
+            summary.columnconfigure(column, weight=1, uniform="practice-summary")
+            card = tk.Label(summary, text=f"{title}\n{value}", bg=PANEL, fg=TEXT,
+                            font=("Segoe UI", 10), padx=8, pady=6, anchor="w", justify="left")
+            card.grid(row=0, column=column, sticky="ew", padx=(0, 6))
+            card.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(80, e.width - 16)))
+        self.lap_table = _table(overview, (("lap", "圈号"), ("time", "圈速"), ("s1", "赛段1"), ("s2", "赛段2"), ("s3", "赛段3"),
             ("set", "胎组 / 胎组圈"), ("tyre", "配方 / 磨损"), ("state", "统计状态 / 原因")),
-            [(f"总第{r['lap']}圈", seconds(r["time_ms"]), *(seconds(v) for v in r["sector_ms"]),
+            [(f"第{r['lap']}圈", seconds(r["time_ms"]), *(seconds(v) for v in r["sector_ms"]),
               f"{r['tyre_set'] or '未知'} / {r['tyre_lap'] or '未知'}",
               tyre_label(LapTyreInfo(actual_compound=r['compound'],visual_compound=r['visual_compound'],wear_percent=r['wear_percent'])),
               "计入统计" if r["eligible"] else "；".join(r["reasons"])) for r in report["rows"]])
@@ -93,21 +138,28 @@ class PracticeWindow:
             s = group["statistics"]
             groups.append(f"驾驶段 {group['segment_id'] if group['segment_id'] is not None else '未知'} / 胎组 {group['tyre_set'] or '未知'}："
                           f"{s['count']}圈，中位 {seconds(s['median_ms'])}，极差 {seconds(s['spread_ms'])}；总圈号 {group['laps']}")
-        ttk.Label(overview, text="驾驶段与胎组独立；分组统计见比较条件页。", padding=6).pack(fill="x")
+        note = ttk.Label(overview, text=f"标准差 {seconds(stats['stddev_ms'])}；最近120圈以外未列 {report['omitted_laps']} 圈。"
+                        "波动不是驾驶评分；驾驶段与胎组独立，分组统计见比较条件页。", padding=6, foreground=MUTED, justify="left")
+        note.pack(fill="x")
+        note.bind("<Configure>", lambda e: note.configure(wraplength=max(120, e.width - 12)))
         condition_intro = ("起/终燃油仅取距起/终点200米内最早/最晚的已验证同帧样本。\n"
                            "胎温为四轮平均内温的逐样本中位值；ERS为已验证储能中位值，非消耗量。\n"
                            "未知值不按零处理；不做燃油修正或自动因果解释。\n\n" + "\n".join(groups))
         condition_intro += "\n未知胎组归入未识别栏，不表示这些圈确实使用同一套胎。\n赛段汇总（仅有效赛段记录）："
         for i, sector in enumerate(report["sectors"], 1):
             condition_intro += f"\n赛段{i}：{sector['count']}条，最快 {seconds(sector['best_ms'])}，中位 {seconds(sector['median_ms'])}，极差 {seconds(sector['spread_ms'])}"
-        self.condition_table = _table(conditions, (("lap", "总圈数"), ("fuel", "起始燃油 kg"), ("endfuel", "结束燃油 kg"),
+        self.condition_table = _table(conditions, (("lap", "圈号"), ("fuel", "起始燃油 kg"), ("endfuel", "结束燃油 kg"),
             ("temperature", "内温中位 °C"), ("ers", "ERS中位 MJ"), ("modes", "ERS模式代码"), ("coverage", "同帧来源样本")),
-            [(f"总第{r['lap']}圈", condition_text(r["conditions"]["fuel_start_kg"], ""), condition_text(r["conditions"]["fuel_end_kg"], ""),
+            [(f"第{r['lap']}圈", condition_text(r["conditions"]["fuel_start_kg"], ""), condition_text(r["conditions"]["fuel_end_kg"], ""),
               condition_text(r["conditions"]["tyre_inner_median_c"], ""), condition_text(r["conditions"]["ers_median_mj"], ""),
               str(r["conditions"]["ers_modes"]) if r["conditions"]["ers_modes"] else "未知",
               f"状态 {r['conditions']['status_verified_samples']}/{r['conditions']['source_samples']}；胎温 {r['conditions']['temperature_verified_samples']}") for r in report["rows"]])
+        self.notes_button = button(conditions, "条件解释与分组统计", self.toggle_notes)
+        self.notes_button.pack(fill="x", pady=4)
         notes_frame = ttk.Frame(conditions, height=140)
-        notes_frame.pack(fill="both")
+        self.notes_frame = notes_frame
+        if self.notes_open:
+            notes_frame.pack(fill="both")
         notes_frame.pack_propagate(False)
         notes = condition_intro + "\n\n" + "\n".join(f"第{r['lap']}圈 vs 基准：" + "；".join(r["warnings"]) for r in report["condition_warnings"])
         _text(notes_frame, notes)
@@ -137,6 +189,21 @@ class PracticeWindow:
               "审计摘要默认不包含玩家身份、sessionUID数值、IP或私人路径。基础/分析尚未追上、缺少旧字段会标为待核验。\n"
               "档案通过不是零丢包保证；游戏未发送/网络未送达的数据无法靠Raw审计证明。\n"
               "退出等待测试及进程内存趋势仍需实际长测观察，工具不会伪造验收勾选。")
+        self.tabs.select(selected_tab)
+        for name, (y, x, values) in views.items():
+            table = getattr(self, name)
+            table.yview_moveto(y)
+            table.xview_moveto(x)
+            table.selection_set([i for i in table.get_children() if table.item(i, "values")[0] in values])
+        self.set_refreshing(False, f"已提交快照 · 更新于 {datetime.now():%H:%M:%S}；新圈完成后可刷新")
+
+    def toggle_notes(self):
+        self.notes_open = not self.notes_open
+        if self.notes_open:
+            self.notes_frame.pack(fill="both")
+        else:
+            self.notes_frame.pack_forget()
+        self.notes_button.configure(text="收起条件解释" if self.notes_open else "条件解释与分组统计")
 
 
 def show_audit(parent, result):
@@ -159,5 +226,33 @@ def show_audit(parent, result):
             except OSError:
                 messagebox.showerror("保存失败", "无法写入诊断摘要，请检查目录权限或磁盘空间。", parent=root)
     ttk.Button(toolbar, text="保存诊断摘要", command=save).pack(side="right")
-    _text(root, content)
+    tabs = ttk.Notebook(root)
+    tabs.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+    overview, details = ttk.Frame(tabs), ttk.Frame(tabs)
+    tabs.add(overview, text="检查结果")
+    tabs.add(details, text="原始诊断明细")
+    rows = [("已保存 Raw 包数", result.get("raw_packets", "未知")),
+            ("逐包 CRC", "通过" if result.get("raw_crc_valid") is True else "未通过 / 待核验"),
+            ("录制关闭状态", result.get("recording_status") or "未知")]
+    for key, title in (("index_present", "录制索引存在"), ("foundation_present", "基础缓存存在")):
+        rows.append((title, "未知" if result.get(key) is None else "是" if result[key] else "否 / 待核验"))
+    for key, title in (("header_roundtrip_mismatches", "Header 重打包不一致数"),
+                       ("header_decode_errors", "Header 解析错误数"),
+                       ("protocol_validation_errors", "协议校验错误数"),
+                       ("index_mismatches", "录制索引不一致数"),
+                       ("foundation_mismatches", "基础缓存不一致数"),
+                       ("software_drop_count", "软件丢弃计数"),
+                       ("flashback_packets", "Flashback 事件包数"),
+                       ("session_count", "游戏会话数")):
+        value = result.get(key)
+        rows.append((title, "未知 / 待核验" if value is None else str(value)))
+    table = _table(overview, (("check", "检查项目"), ("result", "结果")), rows)
+    table.column("check", width=320, stretch=True)
+    table.column("result", width=220, stretch=True)
+    notes = "；".join(result.get("warnings", ())) or "无额外警告。"
+    notes += "\n" + result.get("limits", "Raw 只证明已保存的接收数据，不能证明网络零丢包。")
+    warning = ttk.Label(overview, text=notes, foreground=AMBER, padding=8, justify="left")
+    warning.pack(fill="x")
+    warning.bind("<Configure>", lambda e: warning.configure(wraplength=max(120, e.width - 16)))
+    _text(details, content)
     return root

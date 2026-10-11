@@ -23,7 +23,7 @@ CONDITION_FIELDS = ("fuel_in_tank", "ers_store_energy", "ers_deploy_mode",
 REASONS = {"invalid_lap": "游戏判定无效", "partial_capture": "覆盖不足",
            "insufficient_samples": "样本不足", "pending": "尚未完成分析",
            "sample_gap": "大间隙", "missing_channels": "关键字段异常",
-           "nonmonotonic_time": "圈内时序异常"}
+           "nonmonotonic_time": "圈内时序异常", "unverified_attempt": "圈段与官方计时未匹配"}
 
 
 def _statistics(values):
@@ -174,7 +174,13 @@ def practice_report(repository, uid, segment_id=None, reference_lap=None, cancel
             if source.status != "ready":
                 reasons.append("源采样" + REASONS.get(source.status, source.status))
             if repository.has_source_samples:
-                flags = con.execute("SELECT MAX(pit_status!=0),MAX(driver_status IN (0,2,3)),MAX(current_lap_invalid),COUNT(DISTINCT player_car_index) FROM telemetry_samples WHERE session_uid=? AND lap_number=? AND superseded=0", (uid, number)).fetchone()
+                if source_rows and source_rows[0].get('_attempt_selected'):
+                    flags = (any(r['pit_status'] != 0 for r in source_rows),
+                             any(r['driver_status'] in (0,2,3) for r in source_rows),
+                             any(r['current_lap_invalid'] for r in source_rows),
+                             len({r['player_car_index'] for r in source_rows}))
+                else:
+                    flags = con.execute("SELECT MAX(pit_status!=0),MAX(driver_status IN (0,2,3)),MAX(current_lap_invalid),COUNT(DISTINCT player_car_index) FROM telemetry_samples WHERE session_uid=? AND lap_number=? AND superseded=0", (uid, number)).fetchone()
                 if flags[0] or flags[1]:
                     reasons.append("出入站/车库圈")
                 if flags[2]:

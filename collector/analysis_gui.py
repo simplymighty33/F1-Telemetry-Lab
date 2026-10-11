@@ -30,18 +30,10 @@ from analysis.practice import practice_report
 from collector.audit_session import audit_session
 from collector.practice_gui import PracticeWindow, show_audit, condition_text
 from decoder.display import lap_display, session_label
-
-
-BACKGROUND = "#10141c"
-PANEL = "#19212d"
-PANEL_ALT = "#252f3e"
-TEXT = "#f4f7fb"
-MUTED = "#9cabc0"
-ACCENT = "#e10600"
-GREEN = "#35c46a"
-CYAN = "#49b8ff"
-AMBER = "#f5b942"
-GRID = "#334052"
+from collector.ui_theme import (
+    BACKGROUND, PANEL, PANEL_ALT, TEXT, MUTED, ACCENT, GREEN, CYAN, AMBER, GRID,
+    configure_theme, button,
+)
 
 
 def format_lap_time(milliseconds: int | float) -> str:
@@ -61,21 +53,30 @@ def lap_label(lap: LapSummary) -> str:
 
 class ComparisonChart(tk.Canvas):
     def __init__(self, master: tk.Misc) -> None:
-        super().__init__(master, bg=PANEL, highlightthickness=0, height=430)
+        super().__init__(master, bg=PANEL, highlightthickness=1, highlightbackground=PANEL,
+                         highlightcolor=CYAN, height=430, takefocus=True)
         self.comparison: LapComparison | None = None
         self.focus_range: tuple[float, float] | None = None
+        self._cursor_distance = None
+        self._axis_font = tkfont.Font(root=self, font=("Segoe UI", 8))
         self.hover_var = tk.StringVar(value="将鼠标移到曲线上查看该距离的数值")
         self.bind("<Configure>", lambda _event: self.redraw())
         self.bind("<Motion>", self._hover)
-        self.bind("<Leave>", lambda _event: self.hover_var.set("将鼠标移到曲线上查看该距离的数值"))
+        self.bind("<Leave>", self._clear_cursor)
+        self.bind("<Left>", lambda _e: self._step_cursor(-1))
+        self.bind("<Right>", lambda _e: self._step_cursor(1))
+        self.bind("<Escape>", self._clear_cursor)
+        self.bind("<MouseWheel>", self._scroll_wheel)
 
     def set_comparison(self, comparison: LapComparison | None) -> None:
         self.comparison = comparison
         self.focus_range = None
+        self._clear_cursor()
         self.redraw()
 
     def focus(self, bounds: tuple[float, float] | None) -> None:
         self.focus_range = bounds
+        self._clear_cursor()
         self.redraw()
 
     def _visible_trace(self) -> tuple:
@@ -88,22 +89,28 @@ class ComparisonChart(tk.Canvas):
 
     def _geometry(self) -> tuple[float, float, float, list[tuple[float, float]]]:
         width = max(300, self.winfo_width())
-        height = max(130, self.winfo_height())
-        left, right, top, bottom, gap = 58.0, width - 18.0, 22.0, height - 24.0, 18.0
-        available = bottom - top - gap * 2
-        delta_height = available * 0.24
-        speed_height = available * 0.43
-        panels = [
-            (top, top + delta_height),
-            (top + delta_height + gap, top + delta_height + gap + speed_height),
-            (top + delta_height + gap + speed_height + gap, bottom),
-        ]
+        line_height = self._axis_font.metrics("linespace")
+        # Keep four plots readable; the analysis window provides a scrollbar
+        # only when font scaling leaves too little vertical space.
+        height = max(self.winfo_height(), 4 * (line_height + 6) + 36 + 10 + line_height + 12)
+        left = max(58.0, self._axis_font.measure("000–000 km/h") + 14.0)
+        right, top = width - 18.0, 10.0
+        bottom, gap = height - self._axis_font.metrics("linespace") - 12.0, 12.0
+        available = bottom - top - gap * 3
+        panels = []
+        for fraction in (.25, .25, .25, .25):
+            panels.append((top, top + available * fraction))
+            top = panels[-1][1] + gap
         return left, right, width, panels
 
     def redraw(self) -> None:
         self.delete("all")
+        self._clear_cursor()
+        left, right, width, panels = self._geometry()
+        self.configure(scrollregion=(0, 0, width, panels[-1][1] + self._axis_font.metrics("linespace") + 12))
         comparison = self.comparison
         if comparison is None or not comparison.trace:
+            self.configure(scrollregion=(0, 0, self.winfo_width(), self.winfo_height()))
             self.create_text(
                 self.winfo_width() / 2, self.winfo_height() / 2,
                 text="请选择两个单圈进行比较", fill=MUTED, font=("Segoe UI", 12),
@@ -112,10 +119,10 @@ class ComparisonChart(tk.Canvas):
         trace = self._visible_trace()
         valid_trace = tuple(p for p in trace if p.valid)
         if not valid_trace:
+            self.configure(scrollregion=(0, 0, self.winfo_width(), self.winfo_height()))
             self.create_text(self.winfo_width() / 2, self.winfo_height() / 2,
                              text="源采样无法可靠核验，暂不绘制比较曲线", fill=MUTED)
             return
-        left, right, _, panels = self._geometry()
         min_distance, max_distance = trace[0].distance_m, trace[-1].distance_m
 
         def x_position(distance: float) -> float:
@@ -136,38 +143,42 @@ class ComparisonChart(tk.Canvas):
         speed_min = max(0.0, min(speeds) - 10)
         speed_max = max(speeds) + 10
         self._series(trace, "reference_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, GREEN, min_distance=min_distance)
-        self._series(trace, "comparison_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, CYAN, min_distance=min_distance)
+        self._series(trace, "comparison_speed_kph", speed_min, speed_max, panels[1], left, right, max_distance, CYAN, dash=(7, 4), min_distance=min_distance)
 
         self._series(trace, "reference_throttle", 0.0, 1.0, panels[2], left, right, max_distance, GREEN, min_distance=min_distance)
-        self._series(trace, "comparison_throttle", 0.0, 1.0, panels[2], left, right, max_distance, CYAN, min_distance=min_distance)
-        self._series(trace, "reference_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#ff6468", dash=(4, 3), min_distance=min_distance)
-        self._series(trace, "comparison_brake", 0.0, 1.0, panels[2], left, right, max_distance, "#d99cff", dash=(4, 3), min_distance=min_distance)
+        self._series(trace, "comparison_throttle", 0.0, 1.0, panels[2], left, right, max_distance, CYAN, dash=(7, 4), min_distance=min_distance)
+        self._series(trace, "reference_brake", 0.0, 1.0, panels[3], left, right, max_distance, "#ff6468", dash=(2, 3), min_distance=min_distance)
+        self._series(trace, "comparison_brake", 0.0, 1.0, panels[3], left, right, max_distance, "#d99cff", dash=(7, 3, 2, 3), min_distance=min_distance)
 
         for marker in comparison.reference_braking:
             if not min_distance <= marker.start_distance_m <= max_distance:
                 continue
             x = x_position(marker.start_distance_m)
-            self.create_line(x, panels[1][0], x, panels[2][1], fill=GREEN, dash=(2, 5))
+            self.create_line(x, panels[1][0], x, panels[-1][1], fill=GREEN, dash=(2, 5))
         for marker in comparison.comparison_braking:
             if not min_distance <= marker.start_distance_m <= max_distance:
                 continue
             x = x_position(marker.start_distance_m)
-            self.create_line(x, panels[1][0], x, panels[2][1], fill=CYAN, dash=(2, 5))
+            self.create_line(x, panels[1][0], x, panels[-1][1], fill=CYAN, dash=(2, 5))
 
         labels = (
             ("时间差", f"±{delta_limit / 1000:.2f}s"),
             ("速度", f"{speed_min:.0f}–{speed_max:.0f} km/h"),
-            ("油门 / 刹车", "0–100%"),
+            ("油门", "0–100%"),
+            ("刹车", "0–100%"),
         )
-        for (top, _), (title, scale) in zip(panels, labels):
-            self.create_text(8, top + 4, text=title, fill=TEXT, anchor="nw", font=("Segoe UI Semibold", 9))
-            self.create_text(8, top + 22, text=scale, fill=MUTED, anchor="nw", font=("Segoe UI", 8))
+        for (top, bottom), (title, scale) in zip(panels, labels):
+            if bottom - top >= self._axis_font.metrics("linespace") * 2 + 8:
+                self.create_text(8, top + 4, text=title, fill=TEXT, anchor="nw", font=("Segoe UI Semibold", 9))
+                self.create_text(8, top + 6 + self._axis_font.metrics("linespace"), text=scale, fill=MUTED, anchor="nw", font=self._axis_font)
+            else:
+                self.create_text(8, (top + bottom) / 2, text=title, fill=TEXT, anchor="w", font=self._axis_font)
         for division in range(6):
             distance = min_distance + (max_distance - min_distance) * division / 5
             self.create_text(
-                x_position(distance), panels[2][1] + 9,
+                x_position(distance), panels[-1][1] + 9,
                 text=f"{distance / 1000:.1f} km", fill=MUTED,
-                anchor="n", font=("Segoe UI", 8),
+                anchor="nw" if division == 0 else "ne" if division == 5 else "n", font=self._axis_font,
             )
 
     def _series(
@@ -181,7 +192,7 @@ class ComparisonChart(tk.Canvas):
         right: float,
         max_distance: float,
         color: str,
-        dash: tuple[int, int] | None = None,
+        dash: tuple[int, ...] | None = None,
         min_distance: float = 0.0,
     ) -> None:
         top, bottom = panel
@@ -207,7 +218,11 @@ class ComparisonChart(tk.Canvas):
         if comparison is None or not comparison.trace:
             return
         left, right, _, panels = self._geometry()
-        if not left <= event.x <= right:
+        mouse_y = self.canvasy(event.y)
+        panel_index = next((i for i, (top, bottom) in enumerate(panels)
+                            if top - 1 <= mouse_y <= bottom + 1), None)
+        if not left <= event.x <= right or panel_index is None:
+            self._clear_cursor()
             return
         trace = self._visible_trace()
         if not trace:
@@ -215,16 +230,80 @@ class ComparisonChart(tk.Canvas):
         minimum, maximum = trace[0].distance_m, trace[-1].distance_m
         target = minimum + (maximum - minimum) * (event.x - left) / max(1.0, right - left)
         point = min(trace, key=lambda item: abs(item.distance_m - target))
+        self._inspect_point(point, panel_index, (event.x, mouse_y))
+
+    def scroll_plot(self, *args):
+        self._clear_cursor()
+        self.yview(*args)
+
+    def _scroll_wheel(self, event):
+        if self.yview() != (0.0, 1.0) and event.delta:
+            self.scroll_plot("scroll", -1 if event.delta > 0 else 1, "units")
+            return "break"
+
+    def _clear_cursor(self, _event=None):
         self.delete("hover")
+        self._cursor_distance = None
+        self.hover_var.set("悬停曲线或聚焦后按 ← / → 查看数值；Ctrl+0 恢复整圈")
+        return "break"
+
+    def _step_cursor(self, step):
+        trace = self._visible_trace()
+        if trace:
+            index = min(range(len(trace)), key=lambda i: abs(trace[i].distance_m - self._cursor_distance)) if self._cursor_distance is not None else 0
+            self._inspect_point(trace[max(0, min(len(trace) - 1, index + step))])
+        return "break"
+
+    def _inspect_point(self, point, panel_index=2, anchor=None):
+        trace = self._visible_trace()
+        if not trace:
+            return
+        left, right, _, panels = self._geometry()
+        minimum, maximum = trace[0].distance_m, trace[-1].distance_m
+        self._cursor_distance = point.distance_m
+        self.delete("hover")
+        x = left + (right - left) * (point.distance_m - minimum) / max(1.0, maximum - minimum)
+        anchor = anchor or (x, sum(panels[panel_index]) / 2)
         if not point.valid or not point.connected:
             self.hover_var.set(f"{point.distance_m:.0f} 米｜数据缺口或不可靠采样，不作操作解读")
+            self._show_values(f"最近采样 {point.distance_m:.0f} 米\n数据缺口或不可靠采样\n不显示操作数值", anchor)
             return
-        x = left + (right - left) * (point.distance_m - minimum) / max(1.0, maximum - minimum)
-        self.create_line(x, panels[0][0], x, panels[2][1], fill=TEXT, dash=(3, 3), tags="hover")
+        self.create_line(x, panels[0][0], x, panels[-1][1], fill=TEXT, dash=(3, 3), tags="hover")
+        values = (
+            f"时间差 · {format_delta(point.delta_ms)}\n对比圈 − 基准圈",
+            f"速度\n基准 {point.reference_speed_kph:.1f} km/h\n对比 {point.comparison_speed_kph:.1f} km/h",
+            f"油门\n基准 {point.reference_throttle:.1%}\n对比 {point.comparison_throttle:.1%}",
+            f"刹车\n基准 {point.reference_brake:.1%}\n对比 {point.comparison_brake:.1%}",
+        )
+        self._show_values(f"最近采样 {point.distance_m:.0f} 米 · {values[panel_index]}", anchor)
         self.hover_var.set(
             f"{point.distance_m:.0f} 米｜时间差 {format_delta(point.delta_ms)}｜"
-            f"基准 {point.reference_speed_kph:.0f} km/h｜对比 {point.comparison_speed_kph:.0f} km/h"
+            f"速度 {point.reference_speed_kph:.0f} / {point.comparison_speed_kph:.0f} km/h｜"
+            f"油门 {point.reference_throttle:.0%} / {point.comparison_throttle:.0%}｜"
+            f"刹车 {point.reference_brake:.0%} / {point.comparison_brake:.0%}（基准 / 对比）"
         )
+
+    def _show_values(self, text, anchor):
+        """A bounded Canvas overlay, not a new window or a full curve redraw."""
+        padding, margin = 8, 4
+        width, height = self.winfo_width(), self.winfo_height()
+        viewport_top = self.canvasy(0)
+        item = self.create_text(0, 0, text=text, anchor="nw", fill=TEXT,
+                                font=self._axis_font, width=max(1, width - padding * 2 - margin * 2),
+                                tags=("hover", "hover-values"))
+        bounds = self.bbox(item)
+        box_width = bounds[2] - bounds[0] + padding * 2
+        box_height = bounds[3] - bounds[1] + padding * 2
+        x, y = anchor[0] + 14, anchor[1] + 14
+        if x + box_width > width - margin:
+            x = anchor[0] - box_width - 14
+        x = max(margin, min(x, width - box_width - margin))
+        y = max(viewport_top + margin, min(y, viewport_top + height - box_height - margin))
+        self.move(item, x + padding - bounds[0], y + padding - bounds[1])
+        background = self.create_rectangle(x, y, x + box_width, y + box_height,
+                                           fill=PANEL_ALT, outline=MUTED,
+                                           tags=("hover", "hover-values"))
+        self.tag_lower(background, item)
 
 
 class AnalysisWindow:
@@ -262,7 +341,11 @@ class AnalysisWindow:
         self._live_provider = None
         self._live_session = None
         self._live_uid = None
-        self._connection_text = "赛后浏览：打开已有分析，或从Session恢复分析"
+        self._connection_text = "赛后浏览：在「数据工具」中打开已有分析，或从Session恢复分析"
+        self._details_preference = None
+        self._tools_open = False
+        self._practice_windows = []
+        self._review_target = None
         self._lap_hint = None
         self._lap_hint_after = None
 
@@ -287,6 +370,8 @@ class AnalysisWindow:
         self.delta_card = tk.StringVar(value="圈速差：—")
         self._configure_styles()
         self._build_layout()
+        self._layout_font = tkfont.Font(root=self.root, font=("Segoe UI", 10))
+        root.bind("<Control-0>", lambda _e: self._restore_full_lap(), add="+")
         self._update_connection()
         root.bind("<Configure>", self._window_resized, add="+")
         if database is not None:
@@ -295,37 +380,39 @@ class AnalysisWindow:
         root.after(50, self._poll_comparison)
 
     def _configure_styles(self) -> None:
-        style = ttk.Style(self.root)
-        style.theme_use("clam")
-        style.configure("Analysis.TCombobox", fieldbackground=PANEL_ALT, background=PANEL_ALT, foreground=TEXT)
-        row_height = max(27, tkfont.nametofont("TkDefaultFont", root=self.root).metrics("linespace") + 8)
-        style.configure("Metrics.Treeview", background=PANEL, fieldbackground=PANEL, foreground=TEXT, rowheight=row_height)
-        style.configure("Metrics.Treeview.Heading", background=PANEL_ALT, foreground=TEXT, relief="flat")
+        configure_theme(self.root)
 
     def _button(self, master: tk.Misc, text: str, command, accent: bool = False) -> tk.Button:
-        return tk.Button(
-            master, text=text, command=command,
-            bg=ACCENT if accent else PANEL_ALT, activebackground="#b90500" if accent else "#34445a",
-            fg="white", activeforeground="white", relief="flat", padx=14, pady=4,
-            cursor="hand2", font=("Segoe UI Semibold", 9),
-        )
+        return button(master, text, command, accent)
 
     def _build_layout(self) -> None:
         header = tk.Frame(self.root, bg=BACKGROUND)
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 8))
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(10, 6))
         header.columnconfigure(0, weight=1)
         self.heading_label = tk.Label(header, text="单圈对比与驾驶指标", bg=BACKGROUND, fg=TEXT,
-                                      font=("Segoe UI Semibold", 14 if self._compact_screen else 18), anchor="w")
-        self.heading_label.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+                                      font=("Segoe UI Semibold", 13 if self._compact_screen else 16), anchor="w", justify="left")
+        self.heading_label.grid(row=0, column=0, sticky="ew")
+        self.heading_label.bind("<Configure>", lambda e: self.heading_label.configure(wraplength=max(120, e.width)))
+        self.tools_button = self._button(header, "数据工具", self.toggle_tools)
+        self.tools_button.grid(row=0, column=1, padx=(8, 0))
+        self.details_button = self._button(header, "指标 / 区间", self.toggle_details)
+        self.details_button.grid(row=0, column=2, padx=(8, 0))
         self.toolbar = tk.Frame(header, bg=BACKGROUND)
         self.toolbar.grid(row=1, column=0, sticky="ew")
         self.database_button = self._button(self.toolbar, "打开分析数据库", self.choose_database)
-        self.build_button = self._button(self.toolbar, "从 Session 生成分析", self.choose_session, accent=True)
+        self.build_button = self._button(self.toolbar, "从 Session 生成分析", self.choose_session)
         self.compress_button = self._button(self.toolbar, "压缩旧 Raw", self.choose_compress)
-        self.cancel_button = self._button(self.toolbar, "取消后台任务", self.cancel_task)
+        self.audit_button = self._button(self.toolbar, "长测审计", self.choose_audit)
+        self.cancel_button = self._button(header, "取消任务", self.cancel_task)
         self.cancel_button.configure(state='disabled')
         self._toolbar_columns = None
         self.toolbar.bind("<Configure>", self._layout_toolbar)
+        self.source_path_var = tk.StringVar(value="分析文件：尚未打开")
+        source_path = tk.Label(self.toolbar, textvariable=self.source_path_var, bg=BACKGROUND,
+                               fg=MUTED, anchor="w", justify="left", font=("Segoe UI", 9))
+        source_path.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(3, 0))
+        source_path.bind("<Configure>", lambda e: source_path.configure(wraplength=max(120, e.width)))
+        self.toolbar.grid_remove()
 
         self.database_label = tk.Label(
             self.root, textvariable=self.database_var, bg=BACKGROUND, fg=MUTED,
@@ -334,18 +421,18 @@ class AnalysisWindow:
         self.database_label.grid(row=1, column=0, sticky="ew", padx=20)
         self.database_label.bind("<Configure>", lambda e: self.database_label.configure(wraplength=max(200, e.width)))
 
-        controls = tk.Frame(self.root, bg=PANEL, padx=14, pady=8)
-        controls.grid(row=2, column=0, sticky="ew", padx=20, pady=(8, 8))
+        controls = tk.Frame(self.root, bg=PANEL, padx=10, pady=5)
+        controls.grid(row=2, column=0, sticky="ew", padx=16, pady=(6, 4))
         for column, (title, variable, width) in enumerate((
             ("会话", self.session_var, 34),
             ("基准圈", self.reference_var, 25),
             ("对比圈", self.compare_var, 25),
         )):
             block = tk.Frame(controls, bg=PANEL)
-            block.grid(row=0, column=column, sticky="ew", padx=(0, 14))
+            block.grid(row=0, column=column, sticky="ew", padx=(0, 8))
             controls.grid_columnconfigure(column, weight=1, uniform="selector")
             tk.Label(block, text=title, bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-            combo = ttk.Combobox(block, textvariable=variable, width=width, state="readonly", style="Analysis.TCombobox")
+            combo = ttk.Combobox(block, textvariable=variable, width=1, state="readonly", style="Analysis.TCombobox")
             combo.pack(fill="x", pady=(4, 0))
             if variable is self.session_var:
                 self.session_combo = combo
@@ -358,11 +445,13 @@ class AnalysisWindow:
                 combo.bind("<<ComboboxSelected>>", self._selection_changed)
             if variable is not self.session_var:
                 combo.bind("<Enter>", lambda e: self._schedule_lap_hint(e.widget))
+                combo.bind("<FocusIn>", lambda e: self._schedule_lap_hint(e.widget))
                 combo.bind("<Leave>", lambda _e: self._hide_lap_hint())
+                combo.bind("<FocusOut>", lambda _e: self._hide_lap_hint())
                 combo.bind("<ButtonPress>", lambda _e: self._hide_lap_hint(), add="+")
 
         segment_controls = tk.Frame(self.root, bg=PANEL, padx=14, pady=5)
-        segment_controls.grid(row=3, column=0, sticky="ew", padx=20, pady=(0, 8))
+        segment_controls.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 4))
         segment_controls.columnconfigure(1, weight=1)
         tk.Label(segment_controls, text="驾驶段", bg=PANEL, fg=MUTED).grid(row=0, column=0, padx=(0, 10))
         self.segment_combo = ttk.Combobox(segment_controls, textvariable=self.segment_var,
@@ -372,7 +461,7 @@ class AnalysisWindow:
         self.quality_toggle = self._button(segment_controls, "展开单圈状态", self._toggle_quality)
         self.quality_toggle.configure(state="disabled", pady=3)
         self.quality_toggle.grid(row=0, column=2, padx=(10, 0))
-        self.review_button = self._button(segment_controls, "练习复盘 / 审计", self.choose_practice)
+        self.review_button = self._button(segment_controls, "练习复盘", self.choose_practice, accent=True)
         self.review_button.grid(row=0, column=3, padx=(8, 0))
         self.quality_label = tk.Label(segment_controls, textvariable=self.quality_var, bg=PANEL,
                                       fg=MUTED, anchor="w", justify="left")
@@ -382,7 +471,7 @@ class AnalysisWindow:
         self.quality_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 8))
         self.quality_tree = ttk.Treeview(self.quality_frame, columns=("lap", "time", "quality", "coverage"),
                                         show="headings", height=3, style="Metrics.Treeview")
-        for key, label in (("lap", "总圈数"), ("time", "圈速"), ("quality", "数据状态"), ("coverage", "距离覆盖")):
+        for key, label in (("lap", "圈号"), ("time", "圈速"), ("quality", "数据状态"), ("coverage", "距离覆盖")):
             self.quality_tree.heading(key, text=label)
             self.quality_tree.column(key, width=140, anchor="center")
         quality_scroll = ttk.Scrollbar(self.quality_frame, orient="vertical", command=self.quality_tree.yview)
@@ -392,25 +481,50 @@ class AnalysisWindow:
         self.quality_tree.bind("<Double-1>", self._show_lap_quality)
         self.quality_frame.grid_remove()  # Do not spend height on an empty table before parsing.
         cards = tk.Frame(self.root, bg=BACKGROUND)
-        cards.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 8))
+        cards.grid(row=5, column=0, sticky="ew", padx=16, pady=(0, 4))
         for column, (variable, color) in enumerate(((self.reference_card, GREEN), (self.compare_card, CYAN), (self.delta_card, AMBER))):
-            card = tk.Label(cards, textvariable=variable, bg=PANEL, fg=color, padx=15, pady=7, font=("Segoe UI Semibold", 11), anchor="w")
+            card = tk.Label(cards, textvariable=variable, bg=PANEL, fg=color, padx=8, pady=4, font=("Segoe UI Semibold", 10), anchor="w")
             cards.columnconfigure(column, weight=1, uniform="cards")
             card.grid(row=0, column=column, sticky="ew", padx=(0, 8))
+            card.bind("<Configure>", lambda e: e.widget.configure(wraplength=max(100, e.width - 16)))
 
         body = tk.PanedWindow(self.root, orient="horizontal", bg=BACKGROUND, sashwidth=7, sashrelief="flat")
+        self.body = body
         body.grid(row=6, column=0, sticky="nsew", padx=20)
         chart_frame = tk.Frame(body, bg=PANEL)
         chart_frame.columnconfigure(0, weight=1)
         chart_frame.rowconfigure(0, weight=1)
         metric_frame = tk.Frame(body, bg=PANEL, width=330)
+        self.metric_frame = metric_frame
         body.add(chart_frame, stretch="always", minsize=380)
         body.add(metric_frame, minsize=280)
         self.chart = ComparisonChart(chart_frame)
         self.chart.grid(row=0, column=0, sticky="nsew")
+        self.chart_scroll = ttk.Scrollbar(chart_frame, orient="vertical", command=self.chart.scroll_plot)
+
+        def chart_scroll_state(first, last):
+            self.chart_scroll.set(first, last)
+            # Do not change pane requests before Tk has allocated the chart.
+            # A withdrawn window reports 1x1 and can otherwise stall its first layout.
+            if self.chart.winfo_width() <= 1 or self.chart.winfo_height() <= 1:
+                return
+            needs_scroll = float(last) - float(first) < .999
+            shown = bool(self.chart_scroll.grid_info())
+            if needs_scroll and not shown:
+                self.chart_scroll.grid(row=0, column=1, sticky="ns")
+            elif not needs_scroll and shown:
+                self.chart_scroll.grid_remove()
+
+        self.chart.configure(yscrollcommand=chart_scroll_state)
+        self.legend_label = tk.Label(chart_frame, bg=PANEL, fg=TEXT, anchor="w", justify="left", padx=8,
+            text="速度/油门：基准实线 · 对比长虚线｜刹车：基准短虚线 · 对比点划线", font=("Segoe UI", 9))
+        self.legend_label.grid(row=1, column=0, sticky="ew")
+        self.legend_label.bind("<Configure>", lambda e: self.legend_label.configure(wraplength=max(120, e.width - 16)))
         self.hover_label = tk.Label(chart_frame, textvariable=self.chart.hover_var, bg=PANEL,
                                     fg=MUTED, anchor="w", padx=10, pady=4)
-        self.hover_label.grid(row=1, column=0, sticky="ew")
+        self.hover_label.grid(row=2, column=0, sticky="ew")
+        self.hover_label.configure(justify="left", font=("Segoe UI", 9))
+        self.hover_label.bind("<Configure>", lambda e: self.hover_label.configure(wraplength=max(120, e.width - 20)))
         self.details_tabs = ttk.Notebook(metric_frame)
         self.details_tabs.pack(fill="both", expand=True)
         metrics_body = tk.Frame(self.details_tabs, bg=PANEL)
@@ -460,7 +574,7 @@ class AnalysisWindow:
         self.status_label.bind("<Configure>", lambda e: self.status_label.configure(wraplength=max(160, e.width)))
 
     def _layout_toolbar(self, event) -> None:
-        buttons = (self.build_button, self.database_button, self.compress_button, self.cancel_button)
+        buttons = (self.build_button, self.database_button, self.compress_button, self.audit_button)
         widths = [button.winfo_reqwidth() + 8 for button in buttons]
         columns = 4 if sum(widths) <= event.width else 2 if max(widths) * 2 <= event.width else 1
         if columns == self._toolbar_columns:
@@ -474,7 +588,35 @@ class AnalysisWindow:
     def _window_resized(self, event) -> None:
         if event.widget is self.root:
             self._sync_quality_visibility()
-            self.heading_label.configure(wraplength=max(250, event.width - 40))
+            self._sync_details_visibility()
+
+    def toggle_tools(self) -> None:
+        self._tools_open = not self._tools_open
+        if self._tools_open:
+            self.toolbar.grid()
+        else:
+            self.toolbar.grid_remove()
+        self.tools_button.configure(text="收起工具" if self._tools_open else "数据工具")
+
+    def toggle_details(self) -> None:
+        self._details_preference = str(self.metric_frame) not in tuple(map(str, self.body.panes()))
+        self._sync_details_visibility()
+
+    def _sync_details_visibility(self) -> None:
+        # Measure native font width rather than treating a high-DPI desktop as
+        # a CSS viewport. The chart needs room for readable legends/values.
+        threshold = max(1100, self._layout_font.measure("0" * 85)
+                        + self.metric_frame.winfo_reqwidth() + 40)
+        show = self._details_preference if self._details_preference is not None else self.root.winfo_width() >= threshold
+        present = str(self.metric_frame) in tuple(map(str, self.body.panes()))
+        if show and not present:
+            self.body.add(self.metric_frame, minsize=280)
+        elif not show and present:
+            self.body.forget(self.metric_frame)
+        self.details_button.configure(text="收起侧栏" if show else "指标 / 区间")
+
+    def _show_cancel(self) -> None:
+        self.cancel_button.grid(row=0, column=3, padx=(8, 0))
 
     def _toggle_quality(self) -> None:
         self._quality_expanded = not bool(self.quality_frame.grid_info())
@@ -486,11 +628,15 @@ class AnalysisWindow:
         self._review_cancel.clear()
         self._task_control = None
         self.cancel_button.configure(state='normal')
+        self._show_cancel()
         self._active_task = kind
         self.review_button.configure(state="disabled")
         self.build_button.configure(state="disabled")
         self.compress_button.configure(state="disabled")
         self.status_var.set("正在后台读取已提交快照，请稍候；不会重放或修改Raw。")
+        for view in self._practice_windows:
+            if view.root.winfo_exists():
+                view.set_refreshing(True, "后台任务进行中；完成后可刷新复盘")
         def worker():
             try:
                 value = producer(self._review_cancel.is_set)
@@ -513,7 +659,15 @@ class AnalysisWindow:
         repository = self.repository
         segment = self._segment_labels.get(self.segment_var.get())
         reference = self._lap_labels.get(self.reference_var.get())
-        self._review_session_uid = uid
+        self._request_practice(repository, uid, segment, reference)
+
+    def _request_practice(self, repository, uid, segment, reference, target=None):
+        if self._closing or not self.shutdown_ready():
+            if target is not None and target.root.winfo_exists():
+                target.snapshot_var.set("后台任务进行中，请稍后刷新；当前快照仍保留")
+            return
+        self._review_target = target
+        self._review_context = (repository, uid, segment, reference)
         self._start_review("practice", lambda cancel: practice_report(repository, uid, segment, reference, cancel))
 
     def choose_audit(self):
@@ -521,12 +675,14 @@ class AnalysisWindow:
             return
         selected = filedialog.askdirectory(parent=self.root, title="选择已安全停止的Session（完整只读审计）", initialdir=self.data_directory)
         if selected:
+            self._review_target = None
             self._start_review("audit", lambda cancel: audit_session(Path(selected), cancel))
 
-    def _focus_practice_region(self, reference, candidate, bounds, expected_uid=None):
+    def _focus_practice_region(self, reference, candidate, bounds, expected_uid=None, expected_database=None):
         if self._closing:
             return
-        if expected_uid is not None and self._session_labels.get(self.session_var.get()) != expected_uid:
+        if ((expected_uid is not None and self._session_labels.get(self.session_var.get()) != expected_uid)
+                or (expected_database is not None and (not self.repository or self.repository.database != expected_database))):
             self.status_var.set("当前会话已变化，请重新打开对应会话的复盘。")
             return
         labels = [next((label for label, key in self._lap_labels.items() if key == number), None) for number in (reference, candidate)]
@@ -545,12 +701,13 @@ class AnalysisWindow:
             self.quality_frame.grid()
         else:
             self.quality_frame.grid_remove()
-        if self._quality_has_rows:
+        if self._quality_has_rows and expanded:
             self.quality_label.grid()
         else:
             self.quality_label.grid_remove()
         self.quality_toggle.configure(state="normal" if self._quality_has_rows else "disabled",
-                                      text="收起单圈状态" if self._quality_has_rows and expanded else "展开单圈状态")
+                                      text="收起单圈状态" if self._quality_has_rows and expanded else
+                                      f"单圈状态 · {len(getattr(self, '_quality_rows', {}))}圈" if self._quality_has_rows else "单圈状态")
 
     def choose_database(self) -> None:
         if self._closing or not self.shutdown_ready():
@@ -592,6 +749,7 @@ class AnalysisWindow:
         self._active_task = "analysis"
         self._task_control = TaskControl()
         self.cancel_button.configure(state='normal')
+        self._show_cancel()
         self._last_build_session = session
         self.build_button.configure(state="disabled", text="正在分析…")
         self.compress_button.configure(state="disabled")
@@ -649,6 +807,7 @@ class AnalysisWindow:
         self.status_var.set("正在压缩并逐包校验，完成后保存新副本…")
         self._task_control = TaskControl()
         self.cancel_button.configure(state='normal')
+        self._show_cancel()
         results = self._build_results
 
         def worker() -> None:
@@ -679,6 +838,10 @@ class AnalysisWindow:
             self.root.after(100, self._poll_build_result)
             return
         self.cancel_button.configure(state='disabled')
+        self.cancel_button.grid_remove()
+        self._practice_windows = [view for view in self._practice_windows if view.root.winfo_exists()]
+        for view in self._practice_windows:
+            view.set_refreshing(False)
         if state == "error":
             assert isinstance(value, Exception)
             self._build_failed(value)
@@ -687,9 +850,18 @@ class AnalysisWindow:
             self.build_button.configure(state="normal", text="从 Session 生成分析")
             self.compress_button.configure(state="normal", text="压缩旧 Raw")
             if state == "practice":
-                uid = self._review_session_uid
-                PracticeWindow(self.root, value, self.choose_audit,
-                    lambda reference, candidate, bounds: self._focus_practice_region(reference, candidate, bounds, uid))
+                repository, uid, segment, reference = self._review_context
+                target = self._review_target
+                if target is not None:
+                    if target.root.winfo_exists():
+                        target.set_report(value)
+                else:
+                    # Pin refresh/focus to the snapshot's original source, not
+                    # the currently selected or newly rotated live session.
+                    view = PracticeWindow(self.root, value, self.choose_audit,
+                        lambda a, b, bounds: self._focus_practice_region(a, b, bounds, uid, repository.database),
+                        on_refresh=lambda target: self._request_practice(repository, uid, segment, reference, target))
+                    self._practice_windows.append(view)
             else:
                 show_audit(self.root, value)
             self.status_var.set("已生成只读复盘快照" if state == "practice" else "审计完成；摘要不包含身份、IP或私人路径")
@@ -718,6 +890,8 @@ class AnalysisWindow:
         self.build_button.configure(state="normal", text="从 Session 生成分析")
         self.compress_button.configure(state="normal", text="压缩旧 Raw")
         self.review_button.configure(state="normal")
+        if self._active_task == "practice" and self._review_target is not None and self._review_target.root.winfo_exists():
+            self._review_target.set_refreshing(False, "刷新未完成，原快照保留；可重试")
         self.status_var.set("分析生成失败")
         if isinstance(error, InterruptedError):
             self.status_var.set(str(error))
@@ -771,7 +945,10 @@ class AnalysisWindow:
         if not self.root.winfo_exists():
             return
         self._hide_lap_hint()
-        for button in (self.build_button, self.compress_button, self.database_button, self.review_button, self.cancel_button):
+        for view in self._practice_windows:
+            if view.root.winfo_exists():
+                view.set_refreshing(True, "正在安全关闭，停止接受刷新任务")
+        for button in (self.build_button, self.compress_button, self.database_button, self.review_button, self.cancel_button, self.audit_button):
             button.configure(state="disabled")
         self.status_var.set("正在等待后台任务完成，随后安全关闭…")
 
@@ -866,7 +1043,7 @@ class AnalysisWindow:
         for index, segment in enumerate(reversed(segments), 1):
             state = {"garage": "已回车库", "session_end": "会话结束", "open": "进行中 / 记录终点"}.get(segment["end_reason"], segment["end_reason"])
             partial = " / 中途开始" if not segment["start_complete"] else ""
-            label = f"第{index}段 · 总第{segment['first_lap']}–{segment['last_lap']}圈 · {state}{partial}"
+            label = f"第{index}段 · 第{segment['first_lap']}–{segment['last_lap']}圈 · {state}{partial}"
             labels[label] = segment["id"]
         previous = self._segment_labels.get(self.segment_var.get())
         self._segment_labels = labels
@@ -892,9 +1069,10 @@ class AnalysisWindow:
             variable.set(label + "：—")
 
     def _update_connection(self):
-        path = str(self.repository.database) if self.repository else "等待分析数据库"
-        # Preserve chart space on short/high-DPI screens; full path stays in repository.
-        self.database_var.set(self._connection_text if self._compact_screen else f"{self._connection_text}\n分析文件：{path}")
+        # Source mode stays visible; full path is available in data tools.
+        self.database_var.set(self._connection_text)
+        path = str(self.repository.database) if self.repository else "尚未打开"
+        self.source_path_var.set(f"分析文件：{path}")
 
     def _hide_lap_hint(self):
         if self._lap_hint_after is not None:
@@ -1022,7 +1200,7 @@ class AnalysisWindow:
             details = row.get("details") or {}
             warning_count = details.get("issue_count", len(details.get("issues", []))) + details.get("incomplete_frame_count", len(details.get("incomplete_frames", [])))
             title = titles.get(row["quality_status"], row["quality_status"])
-            self.quality_tree.insert("", "end", iid=str(row["lap_number"]), values=(f"总第{row['lap_number']}圈", format_lap_time(row["lap_time_ms"]),
+            self.quality_tree.insert("", "end", iid=str(row["lap_number"]), values=(f"第{row['lap_number']}圈", format_lap_time(row["lap_time_ms"]),
                 title + (f" / {warning_count}项待核验" if warning_count else ""),
                 "—" if row["coverage_ratio"] is None else f"{row['coverage_ratio'] * 100:.1f}%"))
         self._quality_rows = {str(row["lap_number"]): row for row in quality}
@@ -1057,7 +1235,7 @@ class AnalysisWindow:
             return
         details = row.get("details")
         window = tk.Toplevel(self.root)
-        window.title(f"总第{row['lap_number']}圈 · 数据质量")
+        window.title(f"第{row['lap_number']}圈 · 数据质量")
         window.geometry(f"{min(760, self.root.winfo_screenwidth()-80)}x{min(540, self.root.winfo_screenheight()-100)}")
         text = tk.Text(window, wrap="word", bg=PANEL, fg=TEXT, padx=16, pady=16)
         scroll = ttk.Scrollbar(window, command=text.yview)
@@ -1147,9 +1325,9 @@ class AnalysisWindow:
         self.chart.set_comparison(comparison)
         reference = comparison.reference
         candidate = comparison.comparison
-        self.reference_card.set(f"基准 总第{reference.lap_number}圈  {format_lap_time(reference.lap_time_ms)}")
-        self.compare_card.set(f"对比 总第{candidate.lap_number}圈  {format_lap_time(candidate.lap_time_ms)}")
-        self.delta_card.set(f"圈速差  {format_delta(candidate.lap_time_ms - reference.lap_time_ms)}")
+        self.reference_card.set(f"基准 第{reference.lap_number}圈  {format_lap_time(reference.lap_time_ms)}")
+        self.compare_card.set(f"对比 第{candidate.lap_number}圈  {format_lap_time(candidate.lap_time_ms)}")
+        self.delta_card.set(f"官方圈速差  {format_delta(candidate.lap_time_ms - reference.lap_time_ms)}")
         self._render_metrics(reference, candidate)
         self._render_regions()
         if focus is not None:
@@ -1160,8 +1338,9 @@ class AnalysisWindow:
                     self._region_selected()
                     break
         self.status_var.set(
-            f"绿色：总第{reference.lap_number}圈（基准）　蓝色：总第{candidate.lap_number}圈（对比）　"
-            "虚线表示制动起点；时间区间页可查看损失位置与操作对照"
+            f"基准：第{reference.lap_number}圈（绿）｜对比：第{candidate.lap_number}圈（蓝）｜"
+            f"未归属差额 {format_delta(comparison.unattributed_delta_ms)}；正值为对比损失，负值为获益。"
+            "点状竖线为制动起点；时间区间页查看明细。"
         )
 
     def _set_region_details(self, text: str) -> None:

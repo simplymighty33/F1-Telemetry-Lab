@@ -1,0 +1,16 @@
+# Verified Windows x64 GUI build: Python 3.13.15. CLI needs none of these.
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
+shiboken6==6.11.2
+pyqtgraph==0.14.0
+numpy==2.5.3
+# Build tools, not runtime requirements:
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.8
+altgraph==0.17.5
+packaging==26.3
+pefile==2024.8.26
+pywin32-ctypes==0.2.3
+setuptools==84.0.0
+colorama==0.4.6

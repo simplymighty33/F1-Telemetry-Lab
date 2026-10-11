@@ -51,6 +51,7 @@ class CollectorSnapshot:
     packet_format: int | None = None
     udp_port: int | None = None
     display_error: str | None = None
+    foundation_decode_errors: int = 0
 
 
 class CollectorService:
@@ -187,6 +188,8 @@ class CollectorService:
                     rate = (len(self._recent_packet_times) - 1) / span
             pipeline = self._pipeline
             capture = self._capture
+            foundation = self._foundation.snapshot() if self._foundation else None
+            analysis = self._foundation.analysis_snapshot() if self._foundation else None
             return CollectorSnapshot(
                 state=self._state,
                 message=self._message,
@@ -203,10 +206,11 @@ class CollectorService:
                 session_type=self._session_type,
                 track_name=self._track_name,
                 game_name=self._game_name,
-                foundation_state=self._foundation.snapshot().state if self._foundation else "disabled",
-                foundation_error=self._foundation.snapshot().error if self._foundation else None,
-                analysis_state=self._foundation.analysis_snapshot().state if self._foundation else "disabled",
-                analysis_error=self._foundation.analysis_snapshot().error if self._foundation else None,
+                foundation_state=foundation.state if foundation else "disabled",
+                foundation_error=foundation.error if foundation else None,
+                foundation_decode_errors=foundation.errors if foundation else 0,
+                analysis_state=analysis.state if analysis else "disabled",
+                analysis_error=analysis.error if analysis else None,
                 health_warnings=self._health_warnings,
                 session_uid=self._game_context[0] if self._game_context else None,
                 player_car_index=self._game_context[1] if self._game_context else None,

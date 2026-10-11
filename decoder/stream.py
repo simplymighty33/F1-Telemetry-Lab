@@ -20,6 +20,7 @@ from decoder.full_parser import (
     compiled_schema,
     decode_packet,
     normalize_player_record,
+    normalize_wire_record,
     player_wire_schema,
 )
 from decoder.header import HEADER_SIZE, PacketHeader
@@ -39,7 +40,7 @@ FOUNDATION_SCHEMAS: dict[int, Schema] = {
     for packet_id in (0, 2, 5, 6, 7, 10, 13, 16)
     if (schema := canonical_player_schema(packet_id)) is not None
 }
-DECODER_VERSION = 2
+DECODER_VERSION = 3
 
 
 def validate_packet(packet: bytes, header: PacketHeader) -> None:
@@ -68,7 +69,8 @@ def decode_player_record(packet: bytes, header: PacketHeader) -> dict[str, Any] 
         return None
     size = compiled_schema(wire_schema)[0].size
     offset = HEADER_SIZE if header.packet_id == 13 else HEADER_SIZE + header.player_car_index * size
-    return _read_schema(packet, offset, wire_schema)[0]
+    return normalize_wire_record(_read_schema(packet, offset, wire_schema)[0],
+                                 header.packet_format, header.packet_id)
 
 
 def decode_foundation_record(packet: bytes, header: PacketHeader) -> dict[str, Any] | None:

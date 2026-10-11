@@ -50,4 +50,4 @@ def tyre_label(tyre):
 
 
 def lap_display(track, stage, number, tyre, time_text):
-    return f"{session_label(track, stage)} · 总第{number}圈｜{tyre_label(tyre)}｜{time_text}"
+    return f"{session_label(track, stage)} · 第{number}圈｜{tyre_label(tyre)}｜{time_text}"

@@ -276,15 +276,33 @@ def _decode_name(raw: bytes) -> str:
     return raw.split(b"\0", 1)[0].decode("utf-8", errors="replace")
 
 
+MOTION_SCHEMA_2026: Schema = tuple(
+    (name, "h" if name.startswith("g_force_") else fmt)
+    for name, fmt in MOTION_SCHEMA
+)
+CAR_TELEMETRY_SCHEMA_2026: Schema = tuple(
+    (name, "B" if name == "engine_temperature" else fmt)
+    for name, fmt in CAR_TELEMETRY_SCHEMA
+)
+
+
+def normalize_wire_record(record: dict[str, Any], packet_format: int, packet_id: int) -> dict[str, Any]:
+    """Convert wire units once, shared by full-car and fast player decoders."""
+    if packet_format == 2026 and packet_id == 0:
+        for name in ("g_force_lateral", "g_force_longitudinal", "g_force_vertical"):
+            record[name] /= 1000.0
+    return record
+
+
 def player_wire_schema(packet_format: int, packet_id: int) -> Schema | None:
     if packet_id == 0:
-        return MOTION_SCHEMA
+        return MOTION_SCHEMA_2026 if packet_format == 2026 else MOTION_SCHEMA
     if packet_id == 2:
         return LAP_SCHEMA if packet_format == 2023 else LAP_SCHEMA_MODERN
     if packet_id == 5:
         return CAR_SETUP_SCHEMA if packet_format == 2023 else CAR_SETUP_SCHEMA_MODERN
     if packet_id == 6:
-        return CAR_TELEMETRY_SCHEMA
+        return CAR_TELEMETRY_SCHEMA_2026 if packet_format == 2026 else CAR_TELEMETRY_SCHEMA
     if packet_id == 7:
         return CAR_STATUS_SCHEMA_2026 if packet_format == 2026 else CAR_STATUS_SCHEMA
     if packet_id == 10:
@@ -550,7 +568,9 @@ def decode_packet(packet: bytes, header: PacketHeader | None = None) -> dict[str
     wire_schema = player_wire_schema(profile.packet_format, packet_id)
 
     if packet_id == 0:
-        result["cars"], offset = _read_records(packet, offset, MOTION_SCHEMA, profile.car_count)
+        result["cars"], offset = _read_records(packet, offset, wire_schema, profile.car_count)
+        for record in result["cars"]:
+            normalize_wire_record(record, profile.packet_format, packet_id)
     elif packet_id == 1:
         values, offset = _decode_session(packet, offset, profile.packet_format)
         result.update(values)
@@ -570,7 +590,7 @@ def decode_packet(packet: bytes, header: PacketHeader | None = None) -> dict[str
             tail, offset = _read_schema(packet, offset, (("next_front_wing_value", "f"),))
             result.update(tail)
     elif packet_id == 6:
-        result["cars"], offset = _read_records(packet, offset, CAR_TELEMETRY_SCHEMA, profile.car_count)
+        result["cars"], offset = _read_records(packet, offset, wire_schema, profile.car_count)
         tail, offset = _read_schema(packet, offset, (
             ("mfd_panel_index", "B"), ("mfd_panel_index_secondary_player", "B"),
             ("suggested_gear", "b"),

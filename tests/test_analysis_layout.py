@@ -21,7 +21,7 @@ class AnalysisLayoutTests(unittest.TestCase):
 
     def test_empty_startup_controls_are_visible_at_all_scalings(self):
         for width, height in ((1366, 768), (1920, 1080)):
-            for dpi in (96, 144, 192):
+            for dpi in (96, 120, 144, 192):
                 with self.subTest(screen=(width, height), dpi=dpi):
                     root = tk.Tk()
                     root.withdraw()
@@ -39,14 +39,19 @@ class AnalysisLayoutTests(unittest.TestCase):
                         self.assertLessEqual(root.winfo_height(), height - 100)
                         self.assertEqual(root.title(), f"{APP_NAME} {DISPLAY_VERSION} · 单圈分析")
                         self.assertFalse(window.quality_frame.winfo_ismapped())
-                        for widget in (window.heading_label, window.database_button, window.build_button,
-                                       window.compress_button, window.session_combo, window.reference_combo,
+                        for widget in (window.heading_label, window.tools_button, window.details_button,
+                                       window.session_combo, window.reference_combo,
                                        window.compare_combo, window.segment_combo, window.quality_toggle, window.review_button,
-                                       window.status_label, window.chart, window.metrics, window.hover_label):
+                                       window.status_label, window.chart, window.hover_label, window.legend_label):
                             self.assert_inside(root, widget)
-                        self.assertGreater(window.chart.winfo_height(), 120)
-                        self.assertEqual(window._toolbar_columns, 4)
-                        self.assertTrue(window.cancel_button.winfo_ismapped())
+                        self.assertGreater(window.chart.winfo_height(), 180)
+                        self.assertFalse(window.build_button.winfo_ismapped())
+                        self.assertFalse(window.cancel_button.winfo_ismapped())
+                        window.tools_button.invoke()
+                        root.update()
+                        for widget in (window.build_button, window.database_button, window.compress_button, window.audit_button):
+                            self.assert_inside(root, widget)
+                        self.assertIn(window._toolbar_columns, (2, 4))
                     finally:
                         root.tk.call("tk", "scaling", previous)
                         for callback in root.tk.splitlist(root.tk.call("after", "info")):
@@ -63,7 +68,7 @@ class AnalysisLayoutTests(unittest.TestCase):
             window.status_var.set("正在分析已提交数据；" * 18)
             root.update()
             self.assert_inside(root, window.status_label)
-            self.assert_inside(root, window.build_button)
+            self.assert_inside(root, window.tools_button)
             self.assertGreater(window.status_label.winfo_height(), 30)
             self.assertGreater(window.chart.winfo_height(), 100)
         finally:

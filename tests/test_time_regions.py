@@ -284,6 +284,9 @@ class RegionGuiTests(unittest.TestCase):
                     root.geometry("+30000+30000")
                     root.deiconify()
                     root.update()
+                    if not window.region_tree.winfo_ismapped():
+                        window.details_button.invoke()
+                        root.update()
                     for widget in (window.region_tree, window.region_details, window.full_lap_button, window.status_label):
                         self.assertTrue(widget.winfo_ismapped())
                         bottom = widget.winfo_rooty() - root.winfo_rooty() + widget.winfo_height()

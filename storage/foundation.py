@@ -42,7 +42,7 @@ class FoundationError(ValueError):
 def foundation_path(source: Path) -> Path:
     # Keep the v0.8/F1-23 cache intact. It is derived and can coexist with the
     # versioned multi-game cache while Raw remains the authority.
-    return source.parent / "foundation" / f"{source.stem}.foundation-v2.db"
+    return source.parent / "foundation" / f"{source.stem}.foundation-v{DECODER_VERSION}.db"
 
 
 def _fields(schema: Schema) -> tuple[tuple[str, str, int], ...]:

@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 0, 3, 0),
-    prodvers=(1, 0, 3, 0),
+    filevers=(2, 0, 0, 0),
+    prodvers=(2, 0, 0, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -13,13 +13,13 @@ VSVersionInfo(
     StringFileInfo([
       StringTable(
         u'040904B0',
-        [StringStruct(u'CompanyName', u'F1 Telemetry Lab'),
-         StringStruct(u'FileDescription', u'F1 Telemetry Lab - Capture and Lap Analysis'),
-         StringStruct(u'FileVersion', u'1.0.3'),
-         StringStruct(u'InternalName', u'F1TelemetryLab'),
-         StringStruct(u'OriginalFilename', u'F1TelemetryLab.exe'),
-         StringStruct(u'ProductName', u'F1 Telemetry Lab'),
-         StringStruct(u'ProductVersion', u'1.0.3')])
+        [StringStruct(u'CompanyName', u'RaceTrace Lab'),
+         StringStruct(u'FileDescription', u'RaceTrace Lab - Capture and Lap Analysis'),
+         StringStruct(u'FileVersion', u'2.0.0'),
+         StringStruct(u'InternalName', u'RaceTraceLab'),
+         StringStruct(u'OriginalFilename', u'RaceTraceLab.exe'),
+         StringStruct(u'ProductName', u'RaceTrace Lab'),
+         StringStruct(u'ProductVersion', u'2.0.0')])
     ]),
     VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
   ]

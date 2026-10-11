@@ -13,7 +13,7 @@ from statistics import median
 MAX_DISTANCE_GAP_M = 50.0
 MAX_TIME_GAP_MS = 1500.0
 SMALL_CLOCK_JITTER_MS = 50.0
-QUALITY_VERSION = 1
+QUALITY_VERSION = 2
 REQUIRED_CHANNELS = ("current_lap_time_ms", "speed_kph", "throttle", "brake")
 
 
@@ -54,6 +54,8 @@ class SourceQuality:
         return self.times[left] + ratio * (self.times[right] - self.times[left])
 
     def supports(self, distance: float) -> bool:
+        if self.status == 'unverified_attempt':
+            return False
         if not self.distances or not self.distances[0] <= distance <= self.distances[-1]:
             return False
         if distance in self.bad_points:
@@ -64,6 +66,8 @@ class SourceQuality:
         return self.connects(distance, distance)
 
     def connects(self, start: float, end: float) -> bool:
+        if self.status == 'unverified_attempt':
+            return False
         if not self.distances or start < self.distances[0] or end > self.distances[-1]:
             return False
         # Inclusive point query; positive-length queries reject any overlap.
@@ -87,7 +91,7 @@ def inspect_source(rows: list[dict]) -> SourceQuality:
     for left, right in zip(rows, rows[1:]):
         a, b = left.get("session_time"), right.get("session_time")
         dt = (b - a) * 1000 if finite(a) and finite(b) else None
-        driving = all(r.get("pit_status", 0) == 0 and r.get("driver_status", 4) in (3, 4)
+        driving = all(r.get("pit_status", 0) == 0 and r.get("driver_status", 4) in (1, 3, 4)
                       for r in (left, right))
         deltas.append(dt if driving and dt is not None and 0 < dt <= 250 else None)
     cadence = median([dt for dt in deltas if dt is not None]) if any(dt is not None for dt in deltas) else None
@@ -113,7 +117,7 @@ def inspect_source(rows: list[dict]) -> SourceQuality:
         game_dt = (b - a) * 1000 if finite(a) and finite(b) else None
         same_context = (left.get("pit_status", 0) == right.get("pit_status", 0) == 0
                         and left.get("driver_status", 4) == right.get("driver_status", 4)
-                        and left.get("driver_status", 4) in (3, 4))
+                        and left.get("driver_status", 4) in (1, 3, 4))
         suspect = (not hard and same_context and local is not None and game_dt is not None
                    and game_dt > max(120.0, local * 3.5) and span > 1.0)
         incomplete = bool(right.get("_incomplete_before"))
@@ -130,6 +134,7 @@ def inspect_source(rows: list[dict]) -> SourceQuality:
     status = ("insufficient_samples" if len(rows) < 2 else
               "missing_channels" if bad_points else
               "nonmonotonic_time" if rollback else
-              "sample_gap" if hard_gap else "ready")
+              "sample_gap" if hard_gap else
+              "unverified_attempt" if rows and rows[0].get('_attempt_unverified') else "ready")
     return SourceQuality(distances, tuple(row.get("current_lap_time_ms") for row in rows), bad_points,
                          tuple(intervals), maximum_distance, maximum_time, status, tuple(issues), cadence)
